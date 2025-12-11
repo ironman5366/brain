@@ -2,390 +2,13 @@
 import mne
 import torch
 
-
-# (output by claude)
-# Complete 10-5 system channels, organized by region (anterior to posterior)
-STANDARD_CHANNELS = [
-    # Nasion/Ground
-    "Nz",
-    # Frontopolar (Fp) row
-    "Fp1",
-    "Fpz",
-    "Fp2",
-    "AFp1",
-    "AFp2",  # 10-5 additions
-    "AFp3h",
-    "AFp4h",
-    # Anterior-Frontal (AF) row
-    "AF9",
-    "AF7",
-    "AF5",
-    "AF3",
-    "AF1",
-    "AFz",
-    "AF2",
-    "AF4",
-    "AF6",
-    "AF8",
-    "AF10",
-    "AF9h",
-    "AF7h",
-    "AF5h",
-    "AF3h",
-    "AF1h",
-    "AF2h",
-    "AF4h",
-    "AF6h",
-    "AF8h",
-    "AF10h",
-    # Anterior-Frontal to Frontal (AFF) - 10-5
-    "AFF9",
-    "AFF7",
-    "AFF5",
-    "AFF3",
-    "AFF1",
-    "AFFz",
-    "AFF2",
-    "AFF4",
-    "AFF6",
-    "AFF8",
-    "AFF10",
-    "AFF9h",
-    "AFF7h",
-    "AFF5h",
-    "AFF3h",
-    "AFF1h",
-    "AFF2h",
-    "AFF4h",
-    "AFF6h",
-    "AFF8h",
-    "AFF10h",
-    # Frontal (F) row
-    "F9",
-    "F7",
-    "F5",
-    "F3",
-    "F1",
-    "Fz",
-    "F2",
-    "F4",
-    "F6",
-    "F8",
-    "F10",
-    "F9h",
-    "F7h",
-    "F5h",
-    "F3h",
-    "F1h",
-    "F2h",
-    "F4h",
-    "F6h",
-    "F8h",
-    "F10h",
-    # Frontal to Fronto-Central (FFC) - 10-5
-    "FFC9",
-    "FFC7",
-    "FFC5",
-    "FFC3",
-    "FFC1",
-    "FFCz",
-    "FFC2",
-    "FFC4",
-    "FFC6",
-    "FFC8",
-    "FFC10",
-    "FFC9h",
-    "FFC7h",
-    "FFC5h",
-    "FFC3h",
-    "FFC1h",
-    "FFC2h",
-    "FFC4h",
-    "FFC6h",
-    "FFC8h",
-    "FFC10h",
-    # Fronto-Central (FC) row
-    "FC9",
-    "FC7",
-    "FC5",
-    "FC3",
-    "FC1",
-    "FCz",
-    "FC2",
-    "FC4",
-    "FC6",
-    "FC8",
-    "FC10",
-    "FC9h",
-    "FC7h",
-    "FC5h",
-    "FC3h",
-    "FC1h",
-    "FC2h",
-    "FC4h",
-    "FC6h",
-    "FC8h",
-    "FC10h",
-    # Fronto-Temporal (FT) positions
-    "FT9",
-    "FT7",
-    "FT8",
-    "FT10",
-    "FT9h",
-    "FT7h",
-    "FT8h",
-    "FT10h",
-    # Fronto-Central to Central (FCC) - 10-5
-    "FCC9",
-    "FCC7",
-    "FCC5",
-    "FCC3",
-    "FCC1",
-    "FCCz",
-    "FCC2",
-    "FCC4",
-    "FCC6",
-    "FCC8",
-    "FCC10",
-    "FCC9h",
-    "FCC7h",
-    "FCC5h",
-    "FCC3h",
-    "FCC1h",
-    "FCC2h",
-    "FCC4h",
-    "FCC6h",
-    "FCC8h",
-    "FCC10h",
-    # Central (C) row
-    "C9",
-    "C7",
-    "C5",
-    "C3",
-    "C1",
-    "Cz",
-    "C2",
-    "C4",
-    "C6",
-    "C8",
-    "C10",
-    "C9h",
-    "C7h",
-    "C5h",
-    "C3h",
-    "C1h",
-    "C2h",
-    "C4h",
-    "C6h",
-    "C8h",
-    "C10h",
-    # Temporal (T) positions (modern naming)
-    "T9",
-    "T7",
-    "T8",
-    "T10",
-    "T9h",
-    "T7h",
-    "T8h",
-    "T10h",
-    # Legacy temporal names (mapped to same positions)
-    "T3",
-    "T4",
-    "T5",
-    "T6",
-    # Central to Centro-Parietal (CCP) - 10-5
-    "CCP9",
-    "CCP7",
-    "CCP5",
-    "CCP3",
-    "CCP1",
-    "CCPz",
-    "CCP2",
-    "CCP4",
-    "CCP6",
-    "CCP8",
-    "CCP10",
-    "CCP9h",
-    "CCP7h",
-    "CCP5h",
-    "CCP3h",
-    "CCP1h",
-    "CCP2h",
-    "CCP4h",
-    "CCP6h",
-    "CCP8h",
-    "CCP10h",
-    # Centro-Parietal (CP) row
-    "CP9",
-    "CP7",
-    "CP5",
-    "CP3",
-    "CP1",
-    "CPz",
-    "CP2",
-    "CP4",
-    "CP6",
-    "CP8",
-    "CP10",
-    "CP9h",
-    "CP7h",
-    "CP5h",
-    "CP3h",
-    "CP1h",
-    "CP2h",
-    "CP4h",
-    "CP6h",
-    "CP8h",
-    "CP10h",
-    # Temporo-Parietal (TP) positions
-    "TP9",
-    "TP7",
-    "TP8",
-    "TP10",
-    "TP9h",
-    "TP7h",
-    "TP8h",
-    "TP10h",
-    # Centro-Parietal to Parietal (CPP) - 10-5
-    "CPP9",
-    "CPP7",
-    "CPP5",
-    "CPP3",
-    "CPP1",
-    "CPPz",
-    "CPP2",
-    "CPP4",
-    "CPP6",
-    "CPP8",
-    "CPP10",
-    "CPP9h",
-    "CPP7h",
-    "CPP5h",
-    "CPP3h",
-    "CPP1h",
-    "CPP2h",
-    "CPP4h",
-    "CPP6h",
-    "CPP8h",
-    "CPP10h",
-    # Parietal (P) row
-    "P9",
-    "P7",
-    "P5",
-    "P3",
-    "P1",
-    "Pz",
-    "P2",
-    "P4",
-    "P6",
-    "P8",
-    "P10",
-    "P9h",
-    "P7h",
-    "P5h",
-    "P3h",
-    "P1h",
-    "P2h",
-    "P4h",
-    "P6h",
-    "P8h",
-    "P10h",
-    # Parietal to Parieto-Occipital (PPO) - 10-5
-    "PPO9",
-    "PPO7",
-    "PPO5",
-    "PPO3",
-    "PPO1",
-    "PPOz",
-    "PPO2",
-    "PPO4",
-    "PPO6",
-    "PPO8",
-    "PPO10",
-    "PPO9h",
-    "PPO7h",
-    "PPO5h",
-    "PPO3h",
-    "PPO1h",
-    "PPO2h",
-    "PPO4h",
-    "PPO6h",
-    "PPO8h",
-    "PPO10h",
-    # Parieto-Occipital (PO) row
-    "PO9",
-    "PO7",
-    "PO5",
-    "PO3",
-    "PO1",
-    "POz",
-    "PO2",
-    "PO4",
-    "PO6",
-    "PO8",
-    "PO10",
-    "PO9h",
-    "PO7h",
-    "PO5h",
-    "PO3h",
-    "PO1h",
-    "PO2h",
-    "PO4h",
-    "PO6h",
-    "PO8h",
-    "PO10h",
-    # Parieto-Occipital to Occipital (POO) - 10-5
-    "POO9",
-    "POO7",
-    "POO5",
-    "POO3",
-    "POO1",
-    "POOz",
-    "POO2",
-    "POO4",
-    "POO6",
-    "POO8",
-    "POO10",
-    "POO9h",
-    "POO7h",
-    "POO5h",
-    "POO3h",
-    "POO1h",
-    "POO2h",
-    "POO4h",
-    "POO6h",
-    "POO8h",
-    "POO10h",
-    # Occipital (O) row
-    "O9",
-    "O1",
-    "Oz",
-    "O2",
-    "O10",
-    "O9h",
-    "O1h",
-    "O2h",
-    "O10h",
-    # Occipital to Inion (OI) - 10-5
-    "OI1",
-    "OIz",
-    "OI2",
-    "OI1h",
-    "OI2h",
-    # Inion
-    "Iz",
-    "I1",
-    "I2",
-    # Reference electrodes (ears/mastoids)
-    "A1",
-    "A2",  # Earlobes
-    "M1",
-    "M2",  # Mastoids
-    "LPA",
-    "RPA",  # Left/Right Preauricular
-    # Additional non-standard but common
-    "Afz",  # Sometimes capitalized differently
-]
+# Internal imports
+from constants import (
+    STANDARD_CHANNELS,
+    DEFAULT_SFREQ,
+    DEFAULT_WINDOW_SECONDS,
+    DEFAULT_NORMALIZATION,
+)
 
 
 # Handle case-insensitive lookup and legacy names
@@ -433,49 +56,86 @@ def normalize_channel_name(name: str) -> str:
     return name.strip()
 
 
-def mne_to_tensor(raw: mne.io.BaseRaw) -> tuple[torch.Tensor, torch.Tensor]:
+def mne_to_tensor(
+    raw: mne.io.BaseRaw,
+    target_sfreq: float = DEFAULT_SFREQ,
+    window_seconds: float = DEFAULT_WINDOW_SECONDS,
+    overlap: float = 0.0,  # 0.0 = no overlap, 0.5 = 50% overlap
+    normalize: str = DEFAULT_NORMALIZATION,  # "window", "recording", or "none"
+    eps: float = 1e-8,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Convert MNE Raw object to standardized tensor with padding mask.
+    Convert MNE Raw object to standardized windowed tensors.
 
     Args:
         raw: MNE Raw object (from EDF, BDF, etc.)
+        target_sfreq: Target sampling frequency in Hz
+        window_seconds: Window length in seconds
+        overlap: Fraction of overlap between windows (0.0 to <1.0)
+        normalize: Normalization strategy:
+            - "window": z-score each window/channel independently
+            - "recording": z-score per channel across entire recording
+            - "none": no normalization
 
     Returns:
-        data: torch.Tensor of shape (NUM_CHANNELS, n_times), zero-padded for missing channels
+        data: torch.Tensor of shape (n_windows, NUM_CHANNELS, window_samples)
         mask: torch.Tensor of shape (NUM_CHANNELS,), True where channel has real data
     """
-    # Get the raw data and channel names
-    raw_data = raw.get_data()  # (n_channels_in_file, n_times)
-    n_times = raw_data.shape[1]
+    # Resample if needed
+    if raw.info["sfreq"] != target_sfreq:
+        print(f"Resamping from {raw.info['sfreq']} -> {target_sfreq}")
+        raw = raw.copy().resample(target_sfreq)
 
-    # Initialize output
-    data = torch.zeros((NUM_CHANNELS, n_times), dtype=torch.float32)
+    # Get the raw data
+    raw_data = torch.from_numpy(raw.get_data())  # (n_channels_in_file, n_times)
+    print("raw data shape", raw_data.shape)
+    n_times = raw_data.shape[1]
+    window_samples = int(target_sfreq * window_seconds)
+
+    # Map to standard channels
+    standardized = torch.zeros((NUM_CHANNELS, n_times), dtype=torch.float32)
     mask = torch.zeros(NUM_CHANNELS, dtype=torch.bool)
 
-    # Track unmatched channels for debugging
-    unmatched = []
-
-    # Map each channel in the file to standard position
     for file_idx, ch_name in enumerate(raw.ch_names):
         normalized = normalize_channel_name(ch_name)
-
         if normalized in CHANNEL_TO_IDX:
             std_idx = CHANNEL_TO_IDX[normalized]
-            data[std_idx] = raw_data[file_idx]
+            standardized[std_idx] = raw_data[file_idx]
             mask[std_idx] = True
         else:
-            unmatched.append(ch_name)
+            print(f"Skipping channel: {ch_name}")
 
-    if unmatched:
-        print(
-            f"Warning: {len(unmatched)} channels not in standard set: {unmatched[:10]}{'...' if len(unmatched) > 10 else ''}"
+    # Recording-level normalization (per channel, across all time)
+    if normalize == "recording":
+        for ch_idx in range(NUM_CHANNELS):
+            if mask[ch_idx]:
+                mean = standardized[ch_idx].mean()
+                std = standardized[ch_idx].std()
+                standardized[ch_idx] = (standardized[ch_idx] - mean) / (std + eps)
+
+    # Chunk into windows
+    step = int(window_samples * (1 - overlap))
+    n_windows = (n_times - window_samples) // step + 1
+
+    if n_windows <= 0:
+        raise ValueError(
+            f"Recording too short: {n_times} samples < {window_samples} window size"
         )
 
+    data = torch.zeros((n_windows, NUM_CHANNELS, window_samples), dtype=torch.float32)
+
+    for i in range(n_windows):
+        start = i * step
+        end = start + window_samples
+        data[i] = standardized[:, start:end]
+
+    # Window-level normalization (per window, per channel)
+    if normalize == "window":
+        for i in range(n_windows):
+            for ch_idx in range(NUM_CHANNELS):
+                if mask[ch_idx]:
+                    mean = data[i, ch_idx].mean()
+                    std = data[i, ch_idx].std()
+                    data[i, ch_idx] = (data[i, ch_idx] - mean) / (std + eps)
+
     return data, mask
-
-
-def get_channel_names_for_mask(mask: torch.Tensor) -> list[str]:
-    """
-    Utility to get the channel names that are present (mask=True).
-    """
-    return [STANDARD_CHANNELS[i] for i in range(len(mask)) if mask[i]]
