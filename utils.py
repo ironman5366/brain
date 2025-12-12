@@ -35,6 +35,14 @@ CHANNEL_TO_IDX = _build_channel_index()
 NUM_CHANNELS = len(STANDARD_CHANNELS)
 
 
+def to_sparse(sample, mask):
+    pass
+
+
+def to_dense(sparse_sample, mask):
+    recreated = torch.zeros(NUM_CHANNELS, sparse_sample.size[-1])
+
+
 def normalize_channel_name(name: str) -> str:
     """
     Normalize channel name by removing common prefixes/suffixes.
@@ -61,8 +69,9 @@ def mne_to_tensor(
     target_sfreq: float = DEFAULT_SFREQ,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     overlap: float = 0.0,  # 0.0 = no overlap, 0.5 = 50% overlap
-    normalize: str = DEFAULT_NORMALIZATION,  # "window", "recording", or "none"
+    normalization: str = DEFAULT_NORMALIZATION,  # "window", "recording", or "none"
     eps: float = 1e-8,
+    verbose: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Convert MNE Raw object to standardized windowed tensors.
@@ -72,7 +81,7 @@ def mne_to_tensor(
         target_sfreq: Target sampling frequency in Hz
         window_seconds: Window length in seconds
         overlap: Fraction of overlap between windows (0.0 to <1.0)
-        normalize: Normalization strategy:
+        normalization: Normalization strategy:
             - "window": z-score each window/channel independently
             - "recording": z-score per channel across entire recording
             - "none": no normalization
@@ -88,7 +97,10 @@ def mne_to_tensor(
 
     # Get the raw data
     raw_data = torch.from_numpy(raw.get_data())  # (n_channels_in_file, n_times)
-    print("raw data shape", raw_data.shape)
+
+    if verbose:
+        print("raw data shape", raw_data.shape)
+
     n_times = raw_data.shape[1]
     window_samples = int(target_sfreq * window_seconds)
 
@@ -103,10 +115,11 @@ def mne_to_tensor(
             standardized[std_idx] = raw_data[file_idx]
             mask[std_idx] = True
         else:
-            print(f"Skipping channel: {ch_name}")
+            if verbose:
+                print(f"Skipping channel: {ch_name}")
 
     # Recording-level normalization (per channel, across all time)
-    if normalize == "recording":
+    if normalization == "recording":
         for ch_idx in range(NUM_CHANNELS):
             if mask[ch_idx]:
                 mean = standardized[ch_idx].mean()
@@ -130,7 +143,7 @@ def mne_to_tensor(
         data[i] = standardized[:, start:end]
 
     # Window-level normalization (per window, per channel)
-    if normalize == "window":
+    if normalization == "window":
         for i in range(n_windows):
             for ch_idx in range(NUM_CHANNELS):
                 if mask[ch_idx]:

@@ -1,6 +1,16 @@
+# Params for transforming a sample into a tensor
+
+# How much should the windows overlap?
+DEFAULT_OVERLAP = 0.0
+
+# What frequency should we sample to?
 DEFAULT_SFREQ = 256  # Hz
+
+# How should we slice windows?
 DEFAULT_WINDOW_SECONDS = 1.0
-DEFAULT_NORMALIZATION = "window"
+
+# Should we normalize w.r.t the whole recording, the window of the sample, or do no normalization?
+DEFAULT_NORMALIZATION = "recording"
 
 
 # (output by claude)

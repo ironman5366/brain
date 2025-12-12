@@ -16,13 +16,20 @@ def fetch_alljoined():
             session_id = f"{subj_id}::{session_dir.name}"
 
             for block_dir in session_dir.iterdir():
+                if not block_dir.is_dir():
+                    continue
+
+                if not block_dir.name.startswith("block_"):
+                    print(f"Malformed block directory {block_dir}, skipping...")
+                    continue
+
                 block_id = f"{session_id}::{block_dir.name}"
 
                 metadata_files = list(block_dir.glob("*.json"))
                 edf_files = list(block_dir.glob("*.edf"))
 
                 # Make sure we're not missing something
-                assert len(edf_files) == 1, f"More than 1 edf file in {block_dir}"
+                assert len(edf_files) == 1, f"Not exactly 1 edf file in {block_dir}"
 
                 metadata_file = None
                 if metadata_files:
@@ -36,5 +43,5 @@ def fetch_alljoined():
                     "subject": subj_id,
                     "session": session_id,
                     "block": block_id,
-                    "metadata": metadata_file
+                    "metadata": metadata_file,
                 }
