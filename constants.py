@@ -13,7 +13,7 @@ DEFAULT_WINDOW_SECONDS = 1.0
 DEFAULT_NORMALIZATION = "recording"
 
 
-# (output by claude)
+# (10-20 channel system stuff, output by claude)
 # Complete 10-5 system channels, organized by region (anterior to posterior)
 STANDARD_CHANNELS = [
     # Nasion/Ground
@@ -396,3 +396,27 @@ STANDARD_CHANNELS = [
     # Additional non-standard but common
     "Afz",  # Sometimes capitalized differently
 ]
+
+
+# Handle case-insensitive lookup and legacy names
+def _build_channel_index():
+    idx = {}
+    for i, ch in enumerate(STANDARD_CHANNELS):
+        idx[ch.upper()] = i
+
+    # Add legacy temporal mappings
+    legacy_map = {
+        "T3": "T7",
+        "T4": "T8",
+        "T5": "P7",
+        "T6": "P8",
+    }
+    for old, new in legacy_map.items():
+        if new.upper() in idx:
+            idx[old.upper()] = idx[new.upper()]
+
+    return idx
+
+
+CHANNEL_TO_IDX = _build_channel_index()
+NUM_CHANNELS = len(STANDARD_CHANNELS)

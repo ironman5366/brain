@@ -2,6 +2,7 @@
 from typing import Literal
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import random
 
 # Internal imports
 from data.alljoined import fetch_alljoined
@@ -18,8 +19,8 @@ import polars as pl
 from pydantic import BaseModel
 from tqdm import tqdm
 import mne
-import vortex as vx
-import pyarrow.parquet as pq
+import torch
+from safetensors.torch import save_file
 
 mne.set_log_level(verbose="WARNING")
 
@@ -40,8 +41,12 @@ class DatasetConfig(BaseModel):
     val_split: float = 0.1
 
 
-def load_file(config: DatasetConfig, data_row) -> list[dict]:
-    raw_data = mne.io.read_raw_edf(data_row["file"])
+def load_file(config: DatasetConfig, file_row: dict) -> list[dict]:
+    """
+    Load a single EDF file and return a list of dicts, one per window.
+    Each dict contains the sample tensor, mask, and metadata.
+    """
+    raw_data = mne.io.read_raw_edf(file_row["file"])
     tens, mask = mne_to_tensor(
         raw_data,
         overlap=config.overlap,
@@ -51,69 +56,117 @@ def load_file(config: DatasetConfig, data_row) -> list[dict]:
         verbose=False,
     )
 
-    sparse_tensor = tens[:, mask]
-    mask_vals = mask.nonzero().squeeze()
+    # tens shape: (n_windows, NUM_CHANNELS, window_samples)
+    # mask shape: (NUM_CHANNELS,) bool
+    mask_indices = mask.nonzero().squeeze()
 
-    rows = []
+    # Build one dict per window
+    samples = []
+    for window_idx in range(tens.shape[0]):
+        # Extract sparse representation for this window
+        sparse_sample = tens[window_idx, mask]  # (n_active_channels, window_samples)
 
-    for i, sample in enumerate(sparse_tensor):
-        rows.append(
+        samples.append(
             {
-                "sample": sample.numpy(),
-                "mask_indices": mask_vals.numpy(),
-                "idx": i,
-                **data_row,
+                "sample": sparse_sample,
+                "mask": mask_indices,
+                "window_idx": window_idx,
+                **file_row,
             }
         )
 
-    return rows
+    return samples
+
+
+def save_split(
+    samples: list[dict],
+    mask_indices: torch.Tensor,
+    safetensors_path: Path,
+    metadata_path: Path,
+):
+    """
+    Stack sample tensors and save to safetensors, save metadata to parquet.
+    """
+    # Stack all sample tensors
+    tensors = torch.stack([s["sample"] for s in samples])
+
+    # Save tensors to safetensors
+    save_file(
+        {"sparse_samples": tensors, "mask_indices": mask_indices}, safetensors_path
+    )
+
+    # Build metadata (exclude tensor fields)
+    metadata_df = pl.from_dicts(samples)
+
+    metadata_df = metadata_df.drop("sample", "mask")
+
+    metadata_df.write_parquet(metadata_path)
+
+    print(f"Saved {tensors.shape} samples to {safetensors_path}")
+    print(f"Saved metadata to {metadata_path}")
 
 
 def build():
-    config = DatasetConfig(name="alljoined-initial")
+    config = DatasetConfig(name="alljoined-2025-12-13")
 
-    samples = []
+    all_samples = []
+    mask_indices = None
 
-    # Fetch samples from each source
+    # Fetch and load samples from each source
     alljoined_files = list(fetch_alljoined())
     with ThreadPoolExecutor(32) as executor:
         futs = []
-
         for file_row in alljoined_files:
             futs.append(executor.submit(load_file, config, file_row))
 
         for fut in tqdm(futs, desc="Loading alljoined data..."):
-            samples.extend(fut.result())
+            file_samples = fut.result()
 
-    # Split
-    df = pl.from_dicts(samples)
-    print(f"Loaded: {len(df):,} samples")
+            # Verify mask consistency (all files should have same active channels)
+            if file_samples:
+                file_mask = file_samples[0]["mask"]
+                if mask_indices is None:
+                    mask_indices = file_mask
+                else:
+                    assert torch.equal(file_mask, mask_indices), (
+                        "Masks differ between files, storage format needs to be changed"
+                    )
 
-    # Split on subject level to avoid data leakage
-    unique_subjects = df.select("subject").unique().sample(fraction=1.0, shuffle=True)
+            all_samples.extend(file_samples)
+
+    print(f"Loaded: {len(all_samples):,} samples")
+
+    # Subject-level splitting
+    unique_subjects = list(set(s["subject"] for s in all_samples))
+    random.shuffle(unique_subjects)
+
     n_train = int(len(unique_subjects) * config.train_split)
-    print("har")
+    train_subjects = set(unique_subjects[:n_train])
+    val_subjects = set(unique_subjects[n_train:])
 
-    train_subjects = unique_subjects[:n_train]["subject"]
-    val_subjects = unique_subjects[n_train:]["subject"]
+    train_samples = [s for s in all_samples if s["subject"] in train_subjects]
+    val_samples = [s for s in all_samples if s["subject"] in val_subjects]
 
-    train_df = df.filter(pl.col("subject").is_in(train_subjects))
-    val_df = df.filter(pl.col("subject").is_in(val_subjects))
+    print(f"Train: {len(train_samples):,} samples from {len(train_subjects)} subjects")
+    print(f"Val: {len(val_samples):,} samples from {len(val_subjects)} subjects")
 
-    print(f"Train: {len(train_df):,} samples from {len(train_subjects)} subjects")
-    print(f"Val: {len(val_df):,} samples from {len(val_subjects)} subjects")
-
-    # Save as vortex files
+    # Save splits
     out_dir = DATA_DIR / config.name
     out_dir.mkdir(exist_ok=True, parents=True)
 
-    train_file = out_dir / f"{config.name}-train.parquet"
-    pq.write_table(train_df.to_arrow(), train_file)
-    print(f"Wrote train split to {str(train_file)}")
+    save_split(
+        train_samples,
+        mask_indices,
+        out_dir / f"{config.name}-train.safetensors",
+        out_dir / f"{config.name}-train-metadata.parquet",
+    )
 
-    val_file = out_dir / f"{config.name}-val.parquet"
-    pq.write_table(val_df.to_arrow(), val_file)
-    print(f"Wrote val split to {str(val_file)}")
+    save_split(
+        val_samples,
+        mask_indices,
+        out_dir / f"{config.name}-val.safetensors",
+        out_dir / f"{config.name}-val-metadata.parquet",
+    )
 
 
 if __name__ == "__main__":

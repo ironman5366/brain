@@ -11,8 +11,8 @@ dependencies = [
     "mne>=1.11.0",
     "polars>=1.36.1",
     "pydantic>=2.12.5",
+    "safetensors>=0.7.0",
     "streamlit>=1.52.1",
     "torch>=2.9.1",
     "tqdm>=4.67.1",
-    "vortex-data>=0.56.0",
 ]

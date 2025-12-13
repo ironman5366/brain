@@ -4,43 +4,12 @@ import torch
 
 # Internal imports
 from constants import (
-    STANDARD_CHANNELS,
     DEFAULT_SFREQ,
     DEFAULT_WINDOW_SECONDS,
     DEFAULT_NORMALIZATION,
+    CHANNEL_TO_IDX,
+    NUM_CHANNELS,
 )
-
-
-# Handle case-insensitive lookup and legacy names
-def _build_channel_index():
-    idx = {}
-    for i, ch in enumerate(STANDARD_CHANNELS):
-        idx[ch.upper()] = i
-
-    # Add legacy temporal mappings
-    legacy_map = {
-        "T3": "T7",
-        "T4": "T8",
-        "T5": "P7",
-        "T6": "P8",
-    }
-    for old, new in legacy_map.items():
-        if new.upper() in idx:
-            idx[old.upper()] = idx[new.upper()]
-
-    return idx
-
-
-CHANNEL_TO_IDX = _build_channel_index()
-NUM_CHANNELS = len(STANDARD_CHANNELS)
-
-
-def to_sparse(sample, mask):
-    pass
-
-
-def to_dense(sparse_sample, mask):
-    recreated = torch.zeros(NUM_CHANNELS, sparse_sample.size[-1])
 
 
 def normalize_channel_name(name: str) -> str:

@@ -1,35 +1,35 @@
 # Builtin imports
 from pathlib import Path
 
+# Internal imports
+from constants import NUM_CHANNELS
+
 # External imports
 from torch.utils.data import Dataset
-import polars as pl
 import torch
-import numpy as np
-from tqdm import tqdm
+from safetensors.torch import load_file
 
 
 class EEGDataset(Dataset):
-    def __init__(self, path: Path):
-        print(f"Loading {path}...")
-        self.data = pl.read_parquet(path)
+    def __init__(self, samples_path: Path):
+        print(f"Loading samples from {samples_path}...")
+        samples_data = load_file(samples_path)
 
-        print("Loading samples...")
-        samples = []
-        for row in tqdm(self.data.iter_rows(named=True)):
-            samples.append(np.array(row["sample"]))
-        ns = np.array(samples)
-        print(f"Started ns = {ns.shape}")
+        # De-sparsify the data
+        mask_indices = samples_data["mask_indices"]
+        self.mask = torch.zeros(NUM_CHANNELS, dtype=torch.bool)
+        self.mask[mask_indices] = True
 
-        self.samples = torch.Tensor(ns)
-        print(f"Samples = {self.samples}")
+        sparse_samples = samples_data["sparse_samples"]
+        self.dense_samples = torch.zeros(NUM_CHANNELS, sparse_samples.shape[-1])
+        self.dense_samples[self.mask] = sparse_samples
 
-        # Don't store double the mem
-        self.data = self.data.drop("sample")
-        print(f"Samples shape {self.samples.shape}")
+        print(
+            f"Sparse samples shape {sparse_samples.shape}, dense samples shape {self.dense_samples.shape}"
+        )
 
     def __len__(self):
-        return len(self.data)
+        return len(self.dense_samples)
 
-    def __getitem__(self, index):
-        return self.samples[index]
+    def __getitem__(self, idx):
+        return self.dense_samples[idx]

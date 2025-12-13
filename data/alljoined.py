@@ -43,5 +43,5 @@ def fetch_alljoined():
                     "subject": subj_id,
                     "session": session_id,
                     "block": block_id,
-                    "metadata": metadata_file,
+                    "metadata": str(metadata_file),
                 }
