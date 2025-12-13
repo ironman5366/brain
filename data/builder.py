@@ -58,8 +58,8 @@ def load_file(config: DatasetConfig, data_row) -> list[dict]:
     for i, sample in enumerate(sparse_tensor):
         rows.append(
             {
-                "sample": sample.to_numpy(),
-                "mask_indices": mask_vals.to_numpy(),
+                "sample": sample.numpy(),
+                "mask_indices": mask_vals.numpy(),
                 "idx": i,
                 **data_row,
             }
