@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from tqdm import tqdm
 import mne
 import vortex as vx
+import pyarrow.parquet as pq
 
 mne.set_log_level(verbose="WARNING")
 
@@ -78,7 +79,7 @@ def build():
     with ThreadPoolExecutor(32) as executor:
         futs = []
 
-        for file_row in alljoined_files[:100]:
+        for file_row in alljoined_files:
             futs.append(executor.submit(load_file, config, file_row))
 
         for fut in tqdm(futs, desc="Loading alljoined data..."):
@@ -104,12 +105,14 @@ def build():
 
     # Save as vortex files
     out_dir = DATA_DIR / config.name
-    train_file = out_dir / f"{config.name}-train.vortex"
-    vx.io.write(vx.array(train_df.to_arrow()), train_file)
+    out_dir.mkdir(exist_ok=True, parents=True)
+
+    train_file = out_dir / f"{config.name}-train.parquet"
+    pq.write_table(train_df.to_arrow(), train_file)
     print(f"Wrote train split to {str(train_file)}")
 
-    val_file = out_dir / f"{config.name}-val.vortex"
-    vx.io.write(vx.array(val_df.to_arrow()), val_file)
+    val_file = out_dir / f"{config.name}-val.parquet"
+    pq.write_table(val_df.to_arrow(), val_file)
     print(f"Wrote val split to {str(val_file)}")
 
 
