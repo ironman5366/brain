@@ -107,7 +107,7 @@ def save_split(
 
 
 def build():
-    config = DatasetConfig(name="alljoined-2025-12-13")
+    config = DatasetConfig(name="alljoined-window-2025-12-14")
 
     all_samples = []
     mask_indices = None

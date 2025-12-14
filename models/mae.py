@@ -9,6 +9,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import repeat
+from pydantic import BaseModel
+from accelerate import Accelerator
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+
+DEFAULT_MASKING_RATIO = 0.75
+DEFAULT_DECODER_DEPTH: int = 1
+DEFAULT_DECODER_HEADS: int = 8
+DEFAULT_DECODER_DIM_HEAD: int = 64
+
+
+class EEGMAEConfig(BaseModel):
+    decoder_dim: int
+
+    masking_ratio: float = DEFAULT_MASKING_RATIO
+    decoder_depth: int = DEFAULT_DECODER_DEPTH
+    decoder_heads: int = DEFAULT_DECODER_HEADS
+    decoder_dim_head: int = DEFAULT_DECODER_DIM_HEAD
 
 
 class EEGMAE(nn.Module):
@@ -17,10 +35,10 @@ class EEGMAE(nn.Module):
         *,
         encoder: EEGViT,
         decoder_dim,
-        masking_ratio=0.75,
-        decoder_depth=1,
-        decoder_heads=8,
-        decoder_dim_head=64,
+        masking_ratio=DEFAULT_MASKING_RATIO,
+        decoder_depth=DEFAULT_DECODER_DEPTH,
+        decoder_heads=DEFAULT_DECODER_HEADS,
+        decoder_dim_head=DEFAULT_DECODER_DIM_HEAD,
     ):
         super().__init__()
         assert masking_ratio > 0 and masking_ratio < 1, (
@@ -128,3 +146,32 @@ class EEGMAE(nn.Module):
         # Calculate reconstruction loss
         recon_loss = F.mse_loss(pred_sample_values, masked_patches)
         return recon_loss
+
+    @classmethod
+    def from_config(cls, encoder: EEGViT, config: EEGMAEConfig):
+        return cls(encoder=encoder, **config.model_dump())
+
+
+class MAETrainer:
+    def __init__(
+        self,
+        *,
+        mae: EEGMAE,
+        accelerator: Accelerator,
+        scheduler: LRScheduler,
+        optimizer: Optimizer,
+    ):
+        self.mae = mae
+        self.accelerator = accelerator
+        self.scheduler = scheduler
+        self.optimizer = optimizer
+
+    def step(self, x):
+        self.optimizer.zero_grad()
+        loss = self.mae(x)
+
+        self.accelerator.backward(loss)
+        self.optimizer.step()
+        self.scheduler.step()
+
+        self.accelerator.log({"loss": loss})

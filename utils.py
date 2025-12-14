@@ -37,35 +37,20 @@ def mne_to_tensor(
     raw: mne.io.BaseRaw,
     target_sfreq: float = DEFAULT_SFREQ,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
-    overlap: float = 0.0,  # 0.0 = no overlap, 0.5 = 50% overlap
+    overlap: float = 0.0,
     normalization: str = DEFAULT_NORMALIZATION,  # "window", "recording", or "none"
     eps: float = 1e-8,
     verbose: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Convert MNE Raw object to standardized windowed tensors.
-
-    Args:
-        raw: MNE Raw object (from EDF, BDF, etc.)
-        target_sfreq: Target sampling frequency in Hz
-        window_seconds: Window length in seconds
-        overlap: Fraction of overlap between windows (0.0 to <1.0)
-        normalization: Normalization strategy:
-            - "window": z-score each window/channel independently
-            - "recording": z-score per channel across entire recording
-            - "none": no normalization
-
-    Returns:
-        data: torch.Tensor of shape (n_windows, NUM_CHANNELS, window_samples)
-        mask: torch.Tensor of shape (NUM_CHANNELS,), True where channel has real data
-    """
     # Resample if needed
     if raw.info["sfreq"] != target_sfreq:
-        print(f"Resamping from {raw.info['sfreq']} -> {target_sfreq}")
+        if verbose:
+            print(f"Resamping from {raw.info['sfreq']} -> {target_sfreq}")
         raw = raw.copy().resample(target_sfreq)
 
-    # Get the raw data
-    raw_data = torch.from_numpy(raw.get_data())  # (n_channels_in_file, n_times)
+    raw_data = torch.from_numpy(raw.get_data()).to(
+        torch.float32
+    )  # (n_ch_in_file, n_times)
 
     if verbose:
         print("raw data shape", raw_data.shape)
@@ -73,51 +58,53 @@ def mne_to_tensor(
     n_times = raw_data.shape[1]
     window_samples = int(target_sfreq * window_seconds)
 
-    # Map to standard channels
     standardized = torch.zeros((NUM_CHANNELS, n_times), dtype=torch.float32)
     mask = torch.zeros(NUM_CHANNELS, dtype=torch.bool)
 
     for file_idx, ch_name in enumerate(raw.ch_names):
-        normalized = normalize_channel_name(ch_name)
-        if normalized in CHANNEL_TO_IDX:
-            std_idx = CHANNEL_TO_IDX[normalized]
+        normalized_name = normalize_channel_name(ch_name)
+        std_idx = CHANNEL_TO_IDX.get(normalized_name)
+        if std_idx is not None:
             standardized[std_idx] = raw_data[file_idx]
             mask[std_idx] = True
         else:
             if verbose:
                 print(f"Skipping channel: {ch_name}")
 
-    # Recording-level normalization (per channel, across all time)
+    # Recording-level normalization (match original: unbiased=True default)
     if normalization == "recording":
-        for ch_idx in range(NUM_CHANNELS):
-            if mask[ch_idx]:
-                mean = standardized[ch_idx].mean()
-                std = standardized[ch_idx].std()
-                standardized[ch_idx] = (standardized[ch_idx] - mean) / (std + eps)
+        x = standardized[mask]  # (n_real_channels, n_times)
+        mean = x.mean(dim=1, keepdim=True)
+        std = x.std(dim=1, keepdim=True)  # unbiased=True by default (matches your code)
+        standardized[mask] = (x - mean) / (std + eps)
 
-    # Chunk into windows
+    # Windowing (vectorized)
     step = int(window_samples * (1 - overlap))
-    n_windows = (n_times - window_samples) // step + 1
+    if step <= 0:
+        raise ValueError(f"Invalid overlap={overlap}: step would be {step}")
 
-    if n_windows <= 0:
+    if n_times < window_samples:
         raise ValueError(
             f"Recording too short: {n_times} samples < {window_samples} window size"
         )
 
-    data = torch.zeros((n_windows, NUM_CHANNELS, window_samples), dtype=torch.float32)
+    win = standardized.unfold(dimension=1, size=window_samples, step=step)  # (C, W, S)
+    n_windows = win.shape[1]
+    if n_windows <= 0:
+        raise ValueError(
+            f"Recording too short for step={step}: got n_windows={n_windows}"
+        )
 
-    for i in range(n_windows):
-        start = i * step
-        end = start + window_samples
-        data[i] = standardized[:, start:end]
+    data = win.permute(1, 0, 2).contiguous()  # (W, C, S)
 
-    # Window-level normalization (per window, per channel)
+    # Window-level normalization (match original: only masked channels, unbiased=True default)
     if normalization == "window":
-        for i in range(n_windows):
-            for ch_idx in range(NUM_CHANNELS):
-                if mask[ch_idx]:
-                    mean = data[i, ch_idx].mean()
-                    std = data[i, ch_idx].std()
-                    data[i, ch_idx] = (data[i, ch_idx] - mean) / (std + eps)
+        x = data[:, mask, :]  # (W, C_real, S)
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, keepdim=True)  # unbiased=True default
+        data[:, mask, :] = (x - mean) / (std + eps)
+
+    elif normalization != "none":
+        raise ValueError(f"Unknown normalization strategy: {normalization}")
 
     return data, mask

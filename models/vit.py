@@ -1,5 +1,8 @@
 # Modified from luicdrains' implementation (https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/vit.py) for EEG data
 
+# Builtin imports
+from typing import Literal
+
 # Internal imports
 from constants import NUM_CHANNELS
 from models.transformer import Transformer
@@ -10,6 +13,28 @@ from torch import nn
 from torch.nn import Module
 from einops.layers.torch import Rearrange
 from einops import repeat
+from pydantic import BaseModel
+
+DEFAULT_POOL = "cls"
+DEFAULT_DROUPOUT = 0.0
+DEFAULT_DIM_HEAD = 64
+DEFAULT_EMB_DROPOUT = 0.0
+
+
+class EEGViTConfig(BaseModel):
+    sample_len: int
+    patch_len: int
+    num_classes: int
+    dim: int
+    depth: int
+    heads: int
+    mlp_dim: int
+
+    pool: Literal["cls"] | Literal["mean"] = DEFAULT_POOL
+    channels: int = NUM_CHANNELS
+    dropout: float = DEFAULT_DROUPOUT
+    dim_head: int = DEFAULT_DIM_HEAD
+    emb_dropout: float = DEFAULT_EMB_DROPOUT
 
 
 class EEGViT(Module):
@@ -23,11 +48,11 @@ class EEGViT(Module):
         depth,
         heads,
         mlp_dim,
-        pool="cls",
+        pool=DEFAULT_POOL,
         channels=NUM_CHANNELS,
-        dim_head=64,
-        dropout=0.0,
-        emb_dropout=0.0,
+        dim_head=DEFAULT_DIM_HEAD,
+        dropout=DEFAULT_DROUPOUT,
+        emb_dropout=DEFAULT_EMB_DROPOUT,
     ):
         super().__init__()
 
@@ -88,3 +113,7 @@ class EEGViT(Module):
 
         x = self.to_latent(x)
         return self.mlp_head(x)
+
+    @classmethod
+    def from_config(cls, config: EEGViTConfig):
+        return cls(**config.model_dump())

@@ -1,3 +1,8 @@
+from pathlib import Path
+
+# Misc for saving and loading
+DEFAULT_CHECKPOINT_DIR = Path.cwd() / "checkpoints"
+
 # Params for transforming a sample into a tensor
 
 # How much should the windows overlap?
@@ -10,7 +15,7 @@ DEFAULT_SFREQ = 256  # Hz
 DEFAULT_WINDOW_SECONDS = 1.0
 
 # Should we normalize w.r.t the whole recording, the window of the sample, or do no normalization?
-DEFAULT_NORMALIZATION = "recording"
+DEFAULT_NORMALIZATION = "window"
 
 
 # (10-20 channel system stuff, output by claude)
