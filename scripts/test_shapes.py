@@ -3,6 +3,7 @@ from pathlib import Path
 
 # Internal imports
 from models.vit import EEGViT
+from models.mae import EEGMAE
 from data.dataset import EEGDataset
 
 
@@ -27,9 +28,17 @@ def main():
         emb_dropout=0.1,
     )
 
-    print("Loaded...")
+    print("Loading MAE...")
+    mae = EEGMAE(
+        encoder=vit,
+        decoder_dim=512,
+    )
+
     out = vit(first_sample)
-    print("Out shape", out.shape)
+    print("Vit out shape", out.shape)
+
+    mae_out = mae(first_sample)
+    print("Mae out", mae_out)
 
 
 if __name__ == "__main__":
