@@ -30,7 +30,9 @@ class EEGMAE(nn.Module):
 
         # extract some hyperparameters and functions from encoder (vision transformer to be trained)
         self.encoder = encoder
-        num_patches, encoder_dim = encoder.temporal_embedding.shape[-2:]
+
+        # Note different from reference because our temporal embedding is 2d not 3d
+        num_patches, encoder_dim = encoder.temporal_embedding.shape
 
         # We split apart the:
 
@@ -68,7 +70,8 @@ class EEGMAE(nn.Module):
         tokens = self.patch_to_emb(patches)
 
         if self.encoder.pool == "cls":
-            tokens += self.encoder.temporal_embedding[:, 1 : (num_patches + 1)]
+            # Note different from original because 2d not 3d
+            tokens += self.encoder.temporal_embedding[1 : (num_patches + 1)]
         elif self.encoder.pool == "mean":
             tokens += self.encoder.temporal_embedding.to(device, dtype=tokens.dtype)
 
