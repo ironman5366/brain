@@ -46,9 +46,8 @@ class EEGViT(Module):
 
         self.to_patch_embedding = nn.Sequential(
             Rearrange(
-                "b c (sl p1) (ch p2) -> b (sl ch) (p1 p2 c)",
-                sl=sample_len,
-                ch=channels,
+                "b ch (np pl) -> b np (pl ch)",
+                pl=patch_len,
             ),
             nn.LayerNorm(patch_dim),
             nn.Linear(patch_dim, dim),
@@ -73,7 +72,7 @@ class EEGViT(Module):
 
     def forward(self, sample):
         batch = sample.shape[0]
-        x = self.to_patch_mbedding(sample)
+        x = self.to_patch_embedding(sample)
 
         cls_tokens = repeat(self.cls_token, "... d -> b ... d", b=batch)
         x = torch.cat((cls_tokens, x), dim=1)

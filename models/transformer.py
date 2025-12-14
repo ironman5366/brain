@@ -12,7 +12,7 @@ class FeedForward(Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.LayerNorm(dim),
-            nn.LInear(dim, hidden_dim),
+            nn.Linear(dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, dim),
@@ -37,7 +37,7 @@ class Attention(Module):
         self.attend = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
 
-        self.to_qkv = nn.Lienar(dim, inner_dim * 3, bias=False)
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
 
         self.to_out = (
             nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
@@ -71,8 +71,10 @@ class Transformer(Module):
         for _ in range(depth):
             self.layers.append(
                 ModuleList(
-                    Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
-                    FeedForward(dim, mlp_dim, dropout=dropout),
+                    [
+                        Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                        FeedForward(dim, mlp_dim, dropout=dropout),
+                    ]
                 )
             )
 
