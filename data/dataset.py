@@ -30,3 +30,8 @@ class EEGDataset(Dataset):
         dense_sample = torch.zeros(NUM_CHANNELS, sparse_sample.shape[-1])
         dense_sample[self.mask] = sparse_sample
         return dense_sample
+
+
+class SparseDataset(EEGDataset):
+    def __getitem__(self, idx):
+        return self.sparse_samples[idx]

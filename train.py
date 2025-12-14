@@ -2,9 +2,10 @@
 import tomllib
 from pathlib import Path
 import sys
+import typing
 
 # Internal imports
-from data.dataset import EEGDataset
+from data.dataset import EEGDataset, SparseDataset
 from models.mae import EEGMAE
 from models.vit import EEGViT, EEGViTConfig
 from models.mae import EEGMAEConfig, MAETrainer
@@ -24,35 +25,46 @@ class Config(BaseModel):
     name: str
     data_path: str
 
+    dataset: typing.Literal["standard"] | typing.Literal["sparse"] = "standard"
+
     # Model config
     mae: EEGMAEConfig
     vit: EEGViTConfig
 
     # Dataloading
     num_workers: int = 8
-    batch_size: int = 256
+    batch_size: int = 1024
 
     # Training
     epochs: int = 10
     checkpoint_dir: str = str(DEFAULT_CHECKPOINT_DIR)
 
-    # Optimizer hyperparams
+    # Optimizer/scheduler hyperparams
     beta1: float = 0.9
     beta2: float = 0.999
     lr: float = 1e-3
     weight_decay: float = 1e-2
+    lr_warmup_steps: int = 32
 
 
 def train(config: Config):
     accelerator = Accelerator(log_with="wandb")
     accelerator.init_trackers(
-        project=WANDB_PROJECT,
+        project_name=WANDB_PROJECT,
         init_kwargs={"entity": WANDB_ENTITY},
         config=config.model_dump(),
     )
 
     print(f"Loading dataset/dataloader from {config.data_path}...")
-    dataset = EEGDataset(samples_path=Path(config.data_path))
+
+    if config.dataset == "standard":
+        dataset_class = EEGDataset
+    elif config.dataset == "sparse":
+        dataset_class = SparseDataset
+    else:
+        raise ValueError(f"Unknown dataset {config.dataset}")
+
+    dataset = dataset_class(samples_path=Path(config.data_path))
     dataloader = DataLoader(
         dataset=dataset, num_workers=config.num_workers, batch_size=config.batch_size
     )
@@ -83,8 +95,8 @@ def train(config: Config):
         mae=mae, accelerator=accelerator, scheduler=scheduler, optimizer=optimizer
     )
 
-    for epoch in range(config.num_epochs):
-        print(f"Epoch {epoch}/{config.num_epochs}")
+    for epoch in range(config.epochs):
+        print(f"Epoch {epoch}/{config.epochs}")
         mae.train()
 
         for batch in tqdm(dataloader):
@@ -112,6 +124,10 @@ def train(config: Config):
 def main():
     config_file = Path(sys.argv[1])
     config_data = tomllib.loads(config_file.read_text())
+
+    # If name unspecificed, it's the file name without the extension
+    config_data["name"] = config_data.get("name", config_file.stem)
+
     config = Config(**config_data)
 
     print(f"Training with {config.name}...")

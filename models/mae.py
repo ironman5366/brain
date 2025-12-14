@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from accelerate import Accelerator
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
+from huggingface_hub import PyTorchModelHubMixin
 
 DEFAULT_MASKING_RATIO = 0.75
 DEFAULT_DECODER_DEPTH: int = 1
@@ -29,7 +30,7 @@ class EEGMAEConfig(BaseModel):
     decoder_dim_head: int = DEFAULT_DECODER_DIM_HEAD
 
 
-class EEGMAE(nn.Module):
+class EEGMAE(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
         *,

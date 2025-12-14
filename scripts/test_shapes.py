@@ -6,6 +6,9 @@ from models.vit import EEGViT
 from models.mae import EEGMAE
 from data.dataset import EEGDataset
 
+# External imports
+import torch
+
 
 def main():
     data_path = Path(
@@ -39,6 +42,10 @@ def main():
 
     mae_out = mae(first_sample)
     print("Mae out", mae_out)
+
+    rand = torch.randn(first_sample.shape)
+    mae_rand_out = mae(rand)
+    print("Mae rand out", mae_rand_out)
 
 
 if __name__ == "__main__":

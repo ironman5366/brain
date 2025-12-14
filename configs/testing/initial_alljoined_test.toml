@@ -1,5 +1,4 @@
-name = "initial-alljoined-test"
-data_path = "/kreka/research/willy/side/brain_datasets/alljoined-window-2025-12-14-train.safetensors"
+data_path = "/kreka/research/willy/side/brain_datasets/alljoined-window-2025-12-14/alljoined-window-2025-12-14-train.safetensors"
 
 [vit]
 sample_len=256
