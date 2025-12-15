@@ -48,6 +48,8 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         dim_head: int,
     ):
         super().__init__()
+        self.encoder_dim = encoder_dim
+
         # What portion of the tokens will we mask out for the encoder?
         self.masking_ratio = masking_ratio
 
@@ -58,6 +60,9 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         # TODO: replace with something rope-like for variable sequence length
         # TODO: should I have a separate embedding here for the decoder?
         self.temporal_embedding = nn.Embedding(max_tokens, encoder_dim)
+
+        # Which channel are we in?
+        self.channel_embedding = nn.Embedding(channels, encoder_dim)
 
         # The big boys
         self.samples_to_enc = nn.Linear(channels, encoder_dim)
@@ -77,12 +82,12 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
             mlp_dim=mlp_dim,
             dim_head=dim_head,
         )
-        self.dec_to_samples = nn.Linear(self.decoder_dim, channels)
+        self.dec_to_samples = nn.Linear(decoder_dim, channels)
 
     def forward(self, x):
         # X is [B, Channels, Values].
-        # Token = a value from multiple channels at a single time. So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
 
+        # Token = a value from multiple channels at a single time. So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
         rearranged = x.permute(0, 2, 1)
         tokens = self.samples_to_enc(rearranged)
         batch, num_tokens, _dim = tokens.shape
@@ -112,7 +117,9 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         mask_tokens = repeat(self.mask_token, "d -> b n d", b=batch, n=num_masked)
 
         # Recombine the fill-in-the-blank tokens and the encoded features for the decode pass
-        combined_features = torch.zeros(batch, num_tokens, self.dim, device=x.device)
+        combined_features = torch.zeros(
+            batch, num_tokens, self.encoder_dim, device=x.device
+        )
         combined_features[batch_idx, unmasked_indices] = unmasked_features
         combined_features[batch_idx, masked_indices] = (
             mask_tokens
