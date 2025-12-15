@@ -128,7 +128,7 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         # repeat mask tokens for number of masked, and add the positions using the masked indices derived above
 
         mask_tokens = repeat(self.mask_token, "d -> b n d", b=batch, n=num_masked)
-        mask_tokens = mask_tokens = self.decoder_temporal_emb(masked_indices)
+        mask_tokens = mask_tokens + self.decoder_temporal_emb(masked_indices)
 
         # concat the masked tokens to the decoder tokens and attend with decoder
 
@@ -175,4 +175,6 @@ class MAETrainer:
         self.optimizer.step()
         self.scheduler.step()
 
-        self.accelerator.log({"loss": loss})
+        self.accelerator.log({"loss": loss, "lr": self.scheduler.get_last_lr()[0]})
+
+        return {"loss": loss}
