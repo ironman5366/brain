@@ -20,7 +20,9 @@ DEFAULT_MAX_TOKENS = 1024
 
 
 class EEGMAEConfig(BaseModel):
-    dim: int
+    encoder_dim: int
+    decoder_dim: int
+
     heads: int
     depth: int
     dim_head: int
@@ -35,7 +37,8 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
         *,
-        dim: int,
+        encoder_dim: int,
+        decoder_dim: int,
         heads: int,
         depth: int,
         mlp_dim: int,
@@ -45,28 +48,36 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         dim_head: int,
     ):
         super().__init__()
-        self.dim = dim
-
         # What portion of the tokens will we mask out for the encoder?
         self.masking_ratio = masking_ratio
 
         # This is the fill-in-the-blank token that'll be repeated for all of the masked gaps
-        self.mask_token = nn.Parameter(torch.randn(dim))
+        self.mask_token = nn.Parameter(torch.randn(encoder_dim))
 
         # What position in the sequence we're in (which corresponds to what time of the sample)
         # TODO: replace with something rope-like for variable sequence length
-        self.temporal_embedding = nn.Embedding(max_tokens, dim)
+        # TODO: should I have a separate embedding here for the decoder?
+        self.temporal_embedding = nn.Embedding(max_tokens, encoder_dim)
 
         # The big boys
-        # TODO: may want to do different dims for decoder, MAE paper suggests can get away with less
-        self.samples_to_enc = nn.Linear(channels, dim)
+        self.samples_to_enc = nn.Linear(channels, encoder_dim)
         self.encoder = Transformer(
-            dim=dim, heads=heads, depth=depth, mlp_dim=mlp_dim, dim_head=dim_head
+            dim=encoder_dim,
+            heads=heads,
+            depth=depth,
+            mlp_dim=mlp_dim,
+            dim_head=dim_head,
         )
+
+        self.enc_to_dec = nn.Linear(encoder_dim, decoder_dim)
         self.decoder = Transformer(
-            dim=dim, heads=heads, depth=depth, mlp_dim=mlp_dim, dim_head=dim_head
+            dim=decoder_dim,
+            heads=heads,
+            depth=depth,
+            mlp_dim=mlp_dim,
+            dim_head=dim_head,
         )
-        self.dec_to_samples = nn.Linear(dim, channels)
+        self.dec_to_samples = nn.Linear(self.decoder_dim, channels)
 
     def forward(self, x):
         # X is [B, Channels, Values].
@@ -110,8 +121,11 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
             )  # add the temporal embedding to the mask tokens, which weren't included when we did it earlier
         )
 
+        # Project down to the decoder dim
+        decoder_tokens = self.enc_to_dec(combined_features)
+
         # Decode pass
-        decoded_tokens = self.decoder(combined_features)
+        decoded_tokens = self.decoder(decoder_tokens)
 
         # Project back down to the normal channel dimension
         decoded_samples = self.dec_to_samples(decoded_tokens)
