@@ -11,6 +11,9 @@ from pydantic import BaseModel
 from huggingface_hub import PyTorchModelHubMixin
 from einops import repeat
 import torch.nn.functional as F
+from accelerate import Accelerator
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 
 DEFAULT_MASKING_RATIO = 0.5
 DEFAULT_MAX_TOKENS = 1024
@@ -74,34 +77,31 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         batch, num_tokens, _dim = tokens.shape
 
         num_masked = int(self.masking_ratio * num_tokens)
-        print(f"Masking {num_masked:,} / {num_tokens:,} tokens")
+        # print(f"Masking {num_masked:,} / {num_tokens:,} tokens")
 
-        rand_indices = torch.rand(
-            batch,
-            num_tokens,
-        ).argsort(dim=-1)
+        rand_indices = torch.rand(batch, num_tokens, device=x.device).argsort(dim=-1)
 
         masked_indices, unmasked_indices = (
             rand_indices[:, :num_masked],
             rand_indices[:, num_masked:],
         )
 
-        batch_idx = torch.arange(batch).unsqueeze(1)  # [B, 1]
+        batch_idx = torch.arange(batch, device=x.device).unsqueeze(1)  # [B, 1]
         unmasked_tokens = tokens[batch_idx, unmasked_indices]  # [B, num_masked, 1024]
 
-        print(f"Unmasked tokens shape {unmasked_tokens.shape}")
+        # print(f"Unmasked tokens shape {unmasked_tokens.shape}")
 
         # Run the unmasked tokens through the encoder
         encoded_unmasked_tokens = unmasked_tokens + self.temporal_embedding(
             unmasked_indices
-        )
+        ).to(unmasked_tokens.device)
         unmasked_features = self.encoder(encoded_unmasked_tokens)
 
         # Repeat the fill-in-the-blank mask token for the number of masked, and add the temporal embedding
         mask_tokens = repeat(self.mask_token, "d -> b n d", b=batch, n=num_masked)
 
         # Recombine the fill-in-the-blank tokens and the encoded features for the decode pass
-        combined_features = torch.zeros(batch, num_tokens, self.dim)
+        combined_features = torch.zeros(batch, num_tokens, self.dim, device=x.device)
         combined_features[batch_idx, unmasked_indices] = unmasked_features
         combined_features[batch_idx, masked_indices] = (
             mask_tokens
@@ -122,3 +122,30 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
     @classmethod
     def from_config(cls, config: EEGMAEConfig):
         return cls(**config.model_dump())
+
+
+class MAETrainer:
+    def __init__(
+        self,
+        *,
+        mae: EEGMAE,
+        accelerator: Accelerator,
+        scheduler: LRScheduler,
+        optimizer: Optimizer,
+    ):
+        self.mae = mae
+        self.accelerator = accelerator
+        self.scheduler = scheduler
+        self.optimizer = optimizer
+
+    def step(self, x):
+        self.optimizer.zero_grad()
+        loss = self.mae(x)
+
+        self.accelerator.backward(loss)
+        self.optimizer.step()
+        self.scheduler.step()
+
+        self.accelerator.log({"loss": loss, "lr": self.scheduler.get_last_lr()[0]})
+
+        return {"loss": loss}

@@ -2,6 +2,7 @@
 
 # External imports
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.nn import Module, ModuleList
 from einops import rearrange
@@ -30,12 +31,9 @@ class Attention(Module):
         project_out = not (heads == 1 and dim_head == dim)
 
         self.heads = heads
-        self.scale = dim_head**-0.5
+        self.dropout_p = dropout
 
         self.norm = nn.LayerNorm(dim)
-
-        self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
 
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
 
@@ -51,13 +49,9 @@ class Attention(Module):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), qkv)
 
-        # TODO: use torch optimized sdpa at some point
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-
-        attn = self.attend(dots)
-        attn = self.dropout(attn)
-
-        out = torch.matmul(attn, v)
+        out = F.scaled_dot_product_attention(
+            q, k, v, dropout_p=self.dropout_p if self.training else 0.0
+        )
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
 

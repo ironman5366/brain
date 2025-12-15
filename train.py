@@ -6,9 +6,7 @@ import typing
 
 # Internal imports
 from data.dataset import EEGDataset, SparseDataset
-from models.mae import EEGViTMAE
-from models.vit import EEGViT, EEGViTConfig
-from models.mae import EEGMAEConfig, MAETrainer
+from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -29,11 +27,10 @@ class Config(BaseModel):
 
     # Model config
     mae: EEGMAEConfig
-    vit: EEGViTConfig
 
     # Dataloading
     num_workers: int = 8
-    batch_size: int = 1024
+    batch_size: int = 256
     shuffle: bool = True
 
     # Training
@@ -73,11 +70,8 @@ def train(config: Config):
         shuffle=config.shuffle,
     )
 
-    print("Loading ViT...")
-    vit = EEGViT.from_config(config.vit)
-
     print("Loading MAE...")
-    mae = EEGViTMAE.from_config(vit, config.mae)
+    mae = EEGMAE.from_config(config.mae)
 
     print("Initialzing optimizer and scheduler..")
     optimizer = torch.optim.AdamW(
