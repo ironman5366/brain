@@ -30,7 +30,7 @@ class EEGMAEConfig(BaseModel):
     decoder_dim_head: int = DEFAULT_DECODER_DIM_HEAD
 
 
-class EEGMAE(nn.Module, PyTorchModelHubMixin):
+class EEGViTMAE(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
         *,
@@ -46,6 +46,7 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
             "masking ratio must be kept between 0 and 1"
         )
         self.masking_ratio = masking_ratio
+        print(f"Using masking ratio {self.masking_ratio}")
 
         # extract some hyperparameters and functions from encoder (vision transformer to be trained)
         self.encoder = encoder
@@ -107,6 +108,7 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
 
         batch_range = torch.arange(batch, device=device)[:, None]
         tokens = tokens[batch_range, unmasked_indices]
+        print("har")
 
         # get the patches to be masked for the final reconstruction loss
 
@@ -157,7 +159,7 @@ class MAETrainer:
     def __init__(
         self,
         *,
-        mae: EEGMAE,
+        mae: EEGViTMAE,
         accelerator: Accelerator,
         scheduler: LRScheduler,
         optimizer: Optimizer,

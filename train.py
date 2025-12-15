@@ -6,7 +6,7 @@ import typing
 
 # Internal imports
 from data.dataset import EEGDataset, SparseDataset
-from models.mae import EEGMAE
+from models.mae import EEGViTMAE
 from models.vit import EEGViT, EEGViTConfig
 from models.mae import EEGMAEConfig, MAETrainer
 from constants import DEFAULT_CHECKPOINT_DIR
@@ -34,6 +34,7 @@ class Config(BaseModel):
     # Dataloading
     num_workers: int = 8
     batch_size: int = 1024
+    shuffle: bool = True
 
     # Training
     epochs: int = 10
@@ -66,14 +67,17 @@ def train(config: Config):
 
     dataset = dataset_class(samples_path=Path(config.data_path))
     dataloader = DataLoader(
-        dataset=dataset, num_workers=config.num_workers, batch_size=config.batch_size
+        dataset=dataset,
+        num_workers=config.num_workers,
+        batch_size=config.batch_size,
+        shuffle=config.shuffle,
     )
 
     print("Loading ViT...")
     vit = EEGViT.from_config(config.vit)
 
     print("Loading MAE...")
-    mae = EEGMAE.from_config(vit, config.mae)
+    mae = EEGViTMAE.from_config(vit, config.mae)
 
     print("Initialzing optimizer and scheduler..")
     optimizer = torch.optim.AdamW(
@@ -99,8 +103,12 @@ def train(config: Config):
         print(f"Epoch {epoch}/{config.epochs}")
         mae.train()
 
+        i = 0
         for batch in tqdm(dataloader):
-            trainer.step(batch)
+            l = trainer.step(batch)
+            if i % 100 == 0:
+                print(f"Loss: {l['loss']:.3f}")
+            i += 1
 
         checkpoint_dir = Path(config.checkpoint_dir) / config.name / f"epoch_{epoch}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)

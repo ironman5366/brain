@@ -3,7 +3,7 @@ from pathlib import Path
 
 # Internal imports
 from models.vit import EEGViT
-from models.mae import EEGMAE
+from models.mae import EEGViTMAE
 from data.dataset import EEGDataset
 
 # External imports
@@ -32,7 +32,7 @@ def main():
     )
 
     print("Loading MAE...")
-    mae = EEGMAE(
+    mae = EEGViTMAE(
         encoder=vit,
         decoder_dim=512,
     )
