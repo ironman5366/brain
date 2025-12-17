@@ -2,7 +2,7 @@
 
 # Internal imports
 from models.transformer import Transformer
-from constants import NUM_CHANNELS
+import typing
 
 # External imports
 import torch
@@ -28,9 +28,10 @@ class EEGMAEConfig(BaseModel):
     dim_head: int
     mlp_dim: int
 
-    channels: int = NUM_CHANNELS
     masking_ratio: float = DEFAULT_MASKING_RATIO
-    max_tokens: int = DEFAULT_MAX_TOKENS
+    sequence_len: int
+    max_tokens: int
+    mask_on: typing.Literal["channels"] | typing.Literal["samples"]
 
 
 class EEGMAE(nn.Module, PyTorchModelHubMixin):
@@ -42,12 +43,14 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         heads: int,
         depth: int,
         mlp_dim: int,
-        channels: int,
+        mask_on: str,
+        sequence_len: int,
         masking_ratio: float,
         max_tokens: int,
         dim_head: int,
     ):
         super().__init__()
+        self.mask_on = mask_on
         self.encoder_dim = encoder_dim
 
         # What portion of the tokens will we mask out for the encoder?
@@ -56,16 +59,13 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         # This is the fill-in-the-blank token that'll be repeated for all of the masked gaps
         self.mask_token = nn.Parameter(torch.randn(encoder_dim))
 
-        # What position in the sequence we're in (which corresponds to what time of the sample)
+        # Which position of the sequence we're in - if we mask on channels corresponds to the channel index, if samples, corresponds to the timestep
         # TODO: replace with something rope-like for variable sequence length
         # TODO: should I have a separate embedding here for the decoder?
-        self.temporal_embedding = nn.Embedding(max_tokens, encoder_dim)
-
-        # Which channel are we in?
-        self.channel_embedding = nn.Embedding(channels, encoder_dim)
+        self.positional_embedding = nn.Embedding(max_tokens, encoder_dim)
 
         # The big boys
-        self.samples_to_enc = nn.Linear(channels, encoder_dim)
+        self.seq_to_enc = nn.Linear(sequence_len, encoder_dim)
         self.encoder = Transformer(
             dim=encoder_dim,
             heads=heads,
@@ -82,14 +82,17 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
             mlp_dim=mlp_dim,
             dim_head=dim_head,
         )
-        self.dec_to_samples = nn.Linear(decoder_dim, channels)
+        self.dec_to_seq = nn.Linear(decoder_dim, sequence_len)
 
     def forward(self, x):
         # X is [B, Channels, Values].
 
-        # Token = a value from multiple channels at a single time. So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
-        rearranged = x.permute(0, 2, 1)
-        tokens = self.samples_to_enc(rearranged)
+        if self.mask_on == "samples":
+            # If we're masking on samples rather than channels, token = a value from multiple channels at a single time.
+            # So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
+            x = x.permute(0, 2, 1)
+
+        tokens = self.seq_to_enc(x)
         batch, num_tokens, _dim = tokens.shape
 
         num_masked = int(self.masking_ratio * num_tokens)
@@ -108,7 +111,7 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         # print(f"Unmasked tokens shape {unmasked_tokens.shape}")
 
         # Run the unmasked tokens through the encoder
-        encoded_unmasked_tokens = unmasked_tokens + self.temporal_embedding(
+        encoded_unmasked_tokens = unmasked_tokens + self.positional_embedding(
             unmasked_indices
         ).to(unmasked_tokens.device)
         unmasked_features = self.encoder(encoded_unmasked_tokens)
@@ -123,7 +126,7 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         combined_features[batch_idx, unmasked_indices] = unmasked_features
         combined_features[batch_idx, masked_indices] = (
             mask_tokens
-            + self.temporal_embedding(
+            + self.positional_embedding(
                 masked_indices
             )  # add the temporal embedding to the mask tokens, which weren't included when we did it earlier
         )
@@ -135,9 +138,9 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         decoded_tokens = self.decoder(decoder_tokens)
 
         # Project back down to the normal channel dimension
-        decoded_samples = self.dec_to_samples(decoded_tokens)
+        decoded_samples = self.dec_to_seq(decoded_tokens)
 
-        loss = F.mse_loss(decoded_samples, rearranged)
+        loss = F.mse_loss(decoded_samples, x)
         return loss
 
     @classmethod
