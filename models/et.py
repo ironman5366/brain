@@ -84,8 +84,10 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         )
         self.dec_to_seq = nn.Linear(decoder_dim, sequence_len)
 
-    def forward(self, x):
+    def forward(self, x, return_debug: bool = False):
         # X is [B, Channels, Values].
+
+        ret_data = {}
 
         if self.mask_on == "samples":
             # If we're masking on samples rather than channels, token = a value from multiple channels at a single time.
@@ -104,6 +106,11 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
             rand_indices[:, :num_masked],
             rand_indices[:, num_masked:],
         )
+
+        if return_debug:
+            ret_data["masked_indices"] = masked_indices
+            ret_data["unmasked_indices"] = unmasked_indices
+            ret_data["mask_on"] = self.mask_on
 
         batch_idx = torch.arange(batch, device=x.device).unsqueeze(1)  # [B, 1]
         unmasked_tokens = tokens[batch_idx, unmasked_indices]  # [B, num_masked, 1024]
@@ -140,8 +147,12 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         # Project back down to the normal channel dimension
         decoded_samples = self.dec_to_seq(decoded_tokens)
 
+        if return_debug:
+            ret_data["decoded"] = decoded_samples
+
         loss = F.mse_loss(decoded_samples, x)
-        return loss
+        ret_data["loss"] = loss
+        return ret_data
 
     @classmethod
     def from_config(cls, config: EEGMAEConfig):
@@ -164,7 +175,8 @@ class MAETrainer:
 
     def step(self, x):
         self.optimizer.zero_grad()
-        loss = self.mae(x)
+        res = self.mae(x)
+        loss = res["loss"]
 
         self.accelerator.backward(loss)
         self.optimizer.step()

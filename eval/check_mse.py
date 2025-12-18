@@ -22,7 +22,8 @@ DEVICE = "cuda"
 
 
 def main():
-    checkpoint_path = "checkpoints/alljoined_et_v1_2025_12_15/final"
+    # checkpoint_path = "checkpoints/alljoined_et_v1_2025_12_15/final"
+    checkpoint_path = "checkpoints/alljoined_channel_v1_2025_12_17/epoch_0"
 
     with torch.inference_mode():
         print(f"Loading checkpoint from {checkpoint_path}...")
