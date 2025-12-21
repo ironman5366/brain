@@ -1,7 +1,6 @@
 # Builtin imports
 from typing import Literal
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 import random
 
 # Internal imports
@@ -23,6 +22,7 @@ from tqdm import tqdm
 import mne
 import torch
 from safetensors.torch import save_file
+import ray
 
 mne.set_log_level(verbose="WARNING")
 
@@ -73,6 +73,10 @@ def save_split(
 
 
 def build():
+    ray.init(
+        num_cpus=128,
+    )
+
     config = DatasetConfig(name="alljoined-epochs-2025-12-21")
 
     all_samples = []
@@ -80,34 +84,34 @@ def build():
 
     # Fetch and load samples from each source
     alljoined_files = list(fetch_alljoined())
-    with ThreadPoolExecutor(32) as executor:
-        futs = []
-        for file_row in alljoined_files:
-            futs.append(
-                executor.submit(
-                    load_alljoined_file,
-                    file_row,
-                    target_sfreq=config.target_sfreq,
-                    tmin=config.tmin,
-                    tmax=config.tmax,
-                    normalization=config.normalization,
-                )
+    aj_remote = ray.remote(num_cpus=8)(load_alljoined_file)
+    futs = []
+
+    for file_row in alljoined_files:
+        futs.append(
+            aj_remote.remote(
+                file_row,
+                target_sfreq=config.target_sfreq,
+                tmin=config.tmin,
+                tmax=config.tmax,
+                normalization=config.normalization,
             )
+        )
 
-        for fut in tqdm(futs, desc="Loading alljoined data..."):
-            file_samples = fut.result()
+    for fut in tqdm(futs, desc="Loading alljoined data..."):
+        file_samples = ray.get(fut)
 
-            # Verify mask consistency (all files should have same active channels)
-            if file_samples:
-                file_mask = file_samples[0]["mask"]
-                if mask_indices is None:
-                    mask_indices = file_mask
-                else:
-                    assert torch.equal(file_mask, mask_indices), (
-                        "Masks differ between files, storage format needs to be changed"
-                    )
+        # Verify mask consistency (all files should have same active channels)
+        if file_samples:
+            file_mask = file_samples[0]["mask"]
+            if mask_indices is None:
+                mask_indices = file_mask
+            else:
+                assert torch.equal(file_mask, mask_indices), (
+                    "Masks differ between files, storage format needs to be changed"
+                )
 
-            all_samples.extend(file_samples)
+        all_samples.extend(file_samples)
 
     print(f"Loaded: {len(all_samples):,} samples")
 

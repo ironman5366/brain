@@ -266,6 +266,7 @@ def extract_alljoined_epochs(
         baseline=baseline,
         preload=True,
         verbose=False,
+        event_repeated="drop",
     )
 
     t_epochs = time.time()
