@@ -29,11 +29,17 @@ def transform(samples):
     return torch.mean(samples, dim=1)
 
 
-def animal_classify():
+def classify():
+    # Train
     ds = SparseClassificationDataset(TRAIN_PATH, class_col="category_num")
     class_dim = ds.class_dim
 
-    dl = DataLoader(ds, num_workers=8, batch_size=1024, shuffle=True)
+    val_ds = SparseClassificationDataset(TRAIN_PATH, class_col="category_num")
+    assert val_ds.class_dim == ds.class_dim, (
+        "Val and train DS have mismatched classification columns"
+    )
+
+    dl = DataLoader(ds, num_workers=8, batch_size=4096, shuffle=True)
     conf = LinearClassifierConfig(input_dim=308, num_classes=class_dim)
     classifier = LinearClassifier.from_config(conf).to(DEVICE)
     optimizer = torch.optim.AdamW(
@@ -57,6 +63,43 @@ def animal_classify():
 
         i += 1
 
+    del ds
+    del dl
+
+    with torch.inference_mode():
+        val_dl = DataLoader(val_ds, num_workers=8, batch_size=1024, shuffle=True)
+
+        i = 0
+
+        all_acc = None
+
+        for batch in tqdm(val_dl):
+            samples, classes = batch
+
+            samples = transform(samples.to(DEVICE))
+            classes = classes.to(DEVICE)
+
+            out = classifier(samples)
+            preds = out.argmax(dim=-1)
+            accuracy = classes == preds
+
+            if all_acc is None:
+                all_acc = accuracy
+            else:
+                all_acc = torch.cat((all_acc, accuracy))
+
+            if i % 100 == 0:
+                print(
+                    f"Accuracy: {len(torch.nonzero(accuracy)) / len(accuracy):.0%}), overall {len(torch.nonzero(all_acc)) / len(all_acc):.0%}"
+                )
+
+            i += 1
+
+        nonzero = len(torch.nonzero(all_acc))
+        total = len(all_acc)
+        perc = nonzero / total
+        print(f"Overall: {nonzero:,}/{total:,} correct, {perc:.0%}")
+
 
 if __name__ == "__main__":
-    animal_classify()
+    classify()
