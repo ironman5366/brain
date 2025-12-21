@@ -5,14 +5,16 @@ from concurrent.futures import ThreadPoolExecutor
 import random
 
 # Internal imports
-from data.alljoined import fetch_alljoined
+from data.alljoined import (
+    fetch_alljoined,
+    load_alljoined_file,
+    DEFAULT_TMIN,
+    DEFAULT_TMAX,
+)
 from constants import (
-    DEFAULT_WINDOW_SECONDS,
     DEFAULT_SFREQ,
     DEFAULT_NORMALIZATION,
-    DEFAULT_OVERLAP,
 )
-from utils import mne_to_tensor
 
 # External imports
 import polars as pl
@@ -30,52 +32,16 @@ DATA_DIR = Path("/kreka/research/willy/side/brain_datasets/")
 class DatasetConfig(BaseModel):
     name: str
 
-    overlap: float = DEFAULT_OVERLAP
-    window_seconds: float = DEFAULT_WINDOW_SECONDS
+    # Epoch timing
+    tmin: float = DEFAULT_TMIN
+    tmax: float = DEFAULT_TMAX
     target_sfreq: float = DEFAULT_SFREQ
-    normalization: Literal["recording"] | Literal["window"] | Literal["none"] = (
+    normalization: Literal["recording"] | Literal["epoch"] | Literal["none"] = (
         DEFAULT_NORMALIZATION
     )
 
     train_split: float = 0.9
     val_split: float = 0.1
-
-
-def load_file(config: DatasetConfig, file_row: dict) -> list[dict]:
-    """
-    Load a single EDF file and return a list of dicts, one per window.
-    Each dict contains the sample tensor, mask, and metadata.
-    """
-    raw_data = mne.io.read_raw_edf(file_row["file"])
-    tens, mask = mne_to_tensor(
-        raw_data,
-        overlap=config.overlap,
-        window_seconds=config.window_seconds,
-        target_sfreq=config.target_sfreq,
-        normalization=config.normalization,
-        verbose=False,
-    )
-
-    # tens shape: (n_windows, NUM_CHANNELS, window_samples)
-    # mask shape: (NUM_CHANNELS,) bool
-    mask_indices = mask.nonzero().squeeze()
-
-    # Build one dict per window
-    samples = []
-    for window_idx in range(tens.shape[0]):
-        # Extract sparse representation for this window
-        sparse_sample = tens[window_idx, mask]  # (n_active_channels, window_samples)
-
-        samples.append(
-            {
-                "sample": sparse_sample,
-                "mask": mask_indices,
-                "window_idx": window_idx,
-                **file_row,
-            }
-        )
-
-    return samples
 
 
 def save_split(
@@ -107,7 +73,7 @@ def save_split(
 
 
 def build():
-    config = DatasetConfig(name="alljoined-window-2025-12-14")
+    config = DatasetConfig(name="alljoined-epochs-2025-12-21")
 
     all_samples = []
     mask_indices = None
@@ -117,7 +83,16 @@ def build():
     with ThreadPoolExecutor(32) as executor:
         futs = []
         for file_row in alljoined_files:
-            futs.append(executor.submit(load_file, config, file_row))
+            futs.append(
+                executor.submit(
+                    load_alljoined_file,
+                    file_row,
+                    target_sfreq=config.target_sfreq,
+                    tmin=config.tmin,
+                    tmax=config.tmax,
+                    normalization=config.normalization,
+                )
+            )
 
         for fut in tqdm(futs, desc="Loading alljoined data..."):
             file_samples = fut.result()
