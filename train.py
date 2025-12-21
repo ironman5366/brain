@@ -5,8 +5,13 @@ import sys
 import typing
 
 # Internal imports
-from data.dataset import EEGDataset, SparseDataset
+from data.dataset import EEGDataset, SparseDataset, SparseClassificationDataset
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
+from models.big_classifier import (
+    EEGClassifier,
+    EEGClassifierConfig,
+    EEGClassifierTrainer,
+)
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -23,10 +28,17 @@ class Config(BaseModel):
     name: str
     data_path: str
 
-    dataset: typing.Literal["standard"] | typing.Literal["sparse"] = "standard"
+    dataset: (
+        typing.Literal["standard"]
+        | typing.Literal["sparse"]
+        | typing.Literal["sparse_classification"]
+    ) = "standard"
+    class_col: str | None = None
 
     # Model config
-    mae: EEGMAEConfig
+    arch: typing.Literal["mae"] | typing.Literal["classifier"] = "mae"
+    mae: EEGMAEConfig | None = None
+    classifier: EEGClassifierConfig | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -54,15 +66,22 @@ def train(config: Config):
     )
 
     print(f"Loading dataset/dataloader from {config.data_path}...")
+    dataset_kwargs = {}
 
     if config.dataset == "standard":
         dataset_class = EEGDataset
     elif config.dataset == "sparse":
         dataset_class = SparseDataset
+    elif config.dataset == "sparse_classification":
+        dataset_class = SparseClassificationDataset
+        assert config.class_col is not None, (
+            "need classifier col to train sparse classification"
+        )
+        dataset_kwargs["class_col"] = config.class_col
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
-    dataset = dataset_class(samples_path=Path(config.data_path))
+    dataset = dataset_class(samples_path=Path(config.data_path), **dataset_kwargs)
     dataloader = DataLoader(
         dataset=dataset,
         num_workers=config.num_workers,
@@ -70,12 +89,19 @@ def train(config: Config):
         shuffle=config.shuffle,
     )
 
-    print("Loading MAE...")
-    mae = EEGMAE.from_config(config.mae)
+    print(f"Loading {config.arch} model...")
+    if config.arch == "mae":
+        assert config.mae is not None, "need MAE config to train MAE"
+        model = EEGMAE.from_config(config.mae)
+    elif config.arch == "classifier":
+        assert config.classifier is not None, "need class col to train classifier"
+        model = EEGClassifier.from_config(config.classifier)
+    else:
+        raise ValueError(f"Unknown arch {config.arch}")
 
     print("Initialzing optimizer and scheduler..")
     optimizer = torch.optim.AdamW(
-        mae.parameters(),
+        model.parameters(),
         lr=config.lr,
         betas=(config.beta1, config.beta2),
         weight_decay=config.weight_decay,
@@ -85,21 +111,38 @@ def train(config: Config):
     )
 
     print("Accelerate prepare...")
-    mae, optimizer, scheduler, dataloader = accelerator.prepare(
-        mae, optimizer, scheduler, dataloader
+    model, optimizer, scheduler, dataloader = accelerator.prepare(
+        model, optimizer, scheduler, dataloader
     )
 
-    trainer = MAETrainer(
-        mae=mae, accelerator=accelerator, scheduler=scheduler, optimizer=optimizer
-    )
+    if config.arch == "mae":
+        trainer = MAETrainer(
+            mae=model, accelerator=accelerator, scheduler=scheduler, optimizer=optimizer
+        )
+    elif config.arch == "classifier":
+        trainer = EEGClassifierTrainer(
+            classifier=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
+    else:
+        raise ValueError(f"Unknown arch {config.arch}")
 
     for epoch in range(config.epochs):
         print(f"Epoch {epoch}/{config.epochs}")
-        mae.train()
+        model.train()
 
         i = 0
         for batch in tqdm(dataloader):
-            l = trainer.step(batch)
+            if config.arch == "mae":
+                l = trainer.step(batch)
+            elif config.arch == "classifier":
+                samples, classes = batch
+                l = trainer.step(samples, classes)
+            else:
+                raise ValueError(f"bad arch {config.arch}")
+
             if i % 100 == 0:
                 print(f"Loss: {l['loss']:.3f}")
             i += 1
@@ -107,7 +150,7 @@ def train(config: Config):
         checkpoint_dir = Path(config.checkpoint_dir) / config.name / f"epoch_{epoch}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         print(f"Checkpointing to {checkpoint_dir}...")
-        _model = accelerator.unwrap_model(mae)
+        _model = accelerator.unwrap_model(model)
         _model.save_pretrained(checkpoint_dir)
 
         accelerator.wait_for_everyone()
@@ -117,7 +160,7 @@ def train(config: Config):
     print(f"Done! Saving to {final_checkpoint_dir}...")
 
     final_checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    _model = accelerator.unwrap_model(mae)
+    _model = accelerator.unwrap_model(model)
     _model.save_pretrained(final_checkpoint_dir)
 
     accelerator.end_training()
