@@ -56,6 +56,18 @@ class Attention(Module):
         return self.to_out(out)
 
 
+class AttentionPooling(Module):
+    def __init__(self, dim, num_heads: int = 8):
+        super().__init__()
+        self.query = nn.Parameter(torch.randn(1, 1, dim))
+        self.attn = nn.MultiheadAttention(dim, num_heads=num_heads, batch_first=True)
+
+    def forward(self, x):
+        q = self.query.expand(x.shape[0], -1, -1)
+        out, _ = self.attn(q, x, x)
+        return out.squeeze(1)
+
+
 class Transformer(Module):
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.0):
         super().__init__()
