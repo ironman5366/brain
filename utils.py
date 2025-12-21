@@ -115,6 +115,7 @@ def standardize_epochs(
     ch_names: list[str],
     normalization: str = "epoch",
     eps: float = 1e-8,
+    verbose: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Standardize epoch data to fixed channel positions and apply normalization.
@@ -141,7 +142,10 @@ def standardize_epochs(
     for file_idx, ch_name in enumerate(ch_names):
         normalized_name = normalize_channel_name(ch_name)
         std_idx = CHANNEL_TO_IDX.get(normalized_name)
-        if std_idx is not None:
+        if std_idx is None:
+            if verbose:
+                print(f"Skipping channel {normalized_name}")
+        else:
             standardized[:, std_idx, :] = epoch_data[:, file_idx, :]
             mask[std_idx] = True
 

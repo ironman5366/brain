@@ -1,14 +1,17 @@
 # Builtin imports
 import json
 from pathlib import Path
+import time
+
+# Internal imports
+from utils import standardize_epochs
+from constants import NUM_CHANNELS
 
 # External imports
 import mne
 import polars as pl
 import torch
 
-# Internal imports
-from utils import standardize_epochs
 
 # Location you've downloaded https://huggingface.co/datasets/Alljoined/Alljoined-1.6M
 ALLJOINED_BASE_DIR = Path("/kreka/research/willy/side/alljoined")
@@ -133,7 +136,6 @@ def load_alljoined_file(
         tmin=tmin,
         tmax=tmax,
         normalization=normalization,
-        verbose=False,
     )
 
     if len(event_metadata) == 0:
@@ -210,10 +212,16 @@ def extract_alljoined_epochs(
         mask: (NUM_CHANNELS,) bool tensor indicating active channels
         events: list of dicts with {image_id, partition, onset, seq_num}
     """
-    from constants import NUM_CHANNELS
+    if verbose:
+        print(f"Extracting from {edf_path}")
 
+    t_start = time.time()
     # Load raw data
     raw = mne.io.read_raw_edf(edf_path, preload=True, verbose=False)
+    t_read = time.time()
+
+    if verbose:
+        print(f"read EDF: {t_read - t_start:2f}s")
 
     # Fix EMOTIV capitalization issue (Afz should be AFz for standard montage)
     if "Afz" in raw.ch_names:
@@ -225,13 +233,28 @@ def extract_alljoined_epochs(
             print(f"Resampling from {raw.info['sfreq']} -> {target_sfreq}")
         raw.resample(target_sfreq)
 
+    t_resample = time.time()
+    if verbose:
+        print(f"resample: {t_resample - t_read:2f}s")
+
     # Get events from annotations
-    events, event_id = mne.events_from_annotations(raw, regexp=event_regexp, verbose=False)
+    events, event_id = mne.events_from_annotations(
+        raw, regexp=event_regexp, verbose=False
+    )
 
     if len(events) == 0:
-        if verbose:
-            print("No events found matching pattern")
-        return torch.zeros((0, NUM_CHANNELS, 0)), torch.zeros(NUM_CHANNELS, dtype=torch.bool), []
+        raise ValueError(f"No events found matching patterns {event_regexp}")
+        # if verbose:
+        #     print("No events found matching pattern")
+        # return (
+        #     torch.zeros((0, NUM_CHANNELS, 0)),
+        #     torch.zeros(NUM_CHANNELS, dtype=torch.bool),
+        #     [],
+        # )
+
+    t_events = time.time()
+    if verbose:
+        print(f"events: {t_events - t_resample:2f}s")
 
     # Create epochs
     epochs = mne.Epochs(
@@ -245,10 +268,16 @@ def extract_alljoined_epochs(
         verbose=False,
     )
 
+    t_epochs = time.time()
+    if verbose:
+        print(f"epochs: {t_epochs - t_events:2f}s")
+
     # Get epoch data as tensor
     epoch_data = torch.from_numpy(epochs.get_data()).to(torch.float32)
 
+    t_tensor = time.time()
     if verbose:
+        print(f"tensor: {t_tensor - t_epochs:2f}s")
         print(f"Created {len(epochs)} epochs, shape: {epoch_data.shape}")
 
     # Standardize channels (whitelist-based) and normalize
@@ -257,6 +286,10 @@ def extract_alljoined_epochs(
         epochs.ch_names,
         normalization=normalization,
     )
+
+    t_std = time.time()
+    if verbose:
+        print(f"std: {t_std - t_tensor:2f}s")
 
     # Parse event descriptions to extract alljoined-specific metadata
     # Format: "stim_test,16641,-1,1" or "session_X,block_Y,stim_test,16641,-1,1"
@@ -288,12 +321,19 @@ def extract_alljoined_epochs(
 
         onset = epochs.events[i, 0] / epochs.info["sfreq"]
 
-        event_metadata.append({
-            "image_id": image_id,
-            "partition": partition,
-            "onset": onset,
-            "seq_num": seq_num,
-        })
+        event_metadata.append(
+            {
+                "image_id": image_id,
+                "partition": partition,
+                "onset": onset,
+                "seq_num": seq_num,
+            }
+        )
+
+    t_aggregate = time.time()
+    if verbose:
+        print(f"aggregate: {t_aggregate - t_std:2f}s")
+        print(f"total: {t_aggregate - t_start:2f}s")
 
     return standardized, mask, event_metadata
 
