@@ -1,0 +1,19 @@
+data_path = "/kreka/research/willy/side/brain_datasets/alljoined-epochs-2025-12-21/alljoined-epochs-2025-12-21-train.safetensors"
+dataset = "sparse"
+
+epochs = 10
+
+[mae]
+encoder_dim = 1024
+encoder_mlp_dim = 4096
+
+decoder_dim = 512
+decoder_mlp_dim = 2048
+
+masking_ratio=0.5
+depth = 6
+heads = 16
+dim_head = 64
+mask_on = "channels"
+max_tokens=32
+sequence_len=308
