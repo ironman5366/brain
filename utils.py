@@ -108,3 +108,61 @@ def mne_to_tensor(
         raise ValueError(f"Unknown normalization strategy: {normalization}")
 
     return data, mask
+
+
+def standardize_epochs(
+    epoch_data: torch.Tensor,
+    ch_names: list[str],
+    normalization: str = "epoch",
+    eps: float = 1e-8,
+    verbose: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Standardize epoch data to fixed channel positions and apply normalization.
+
+    This is a source-agnostic function that maps arbitrary channel names to
+    the standard 10-20 positions and applies normalization.
+
+    Args:
+        epoch_data: (n_epochs, n_channels, n_times) raw epoch tensor
+        ch_names: list of channel names matching epoch_data's channel dimension
+        normalization: "epoch", "recording", or "none"
+        eps: Small constant for numerical stability
+
+    Returns:
+        standardized: (n_epochs, NUM_CHANNELS, n_times) tensor with channels
+                      mapped to standard positions
+        mask: (NUM_CHANNELS,) bool tensor indicating active channels
+    """
+    n_epochs, _, n_times = epoch_data.shape
+
+    standardized = torch.zeros((n_epochs, NUM_CHANNELS, n_times), dtype=torch.float32)
+    mask = torch.zeros(NUM_CHANNELS, dtype=torch.bool)
+
+    for file_idx, ch_name in enumerate(ch_names):
+        normalized_name = normalize_channel_name(ch_name)
+        std_idx = CHANNEL_TO_IDX.get(normalized_name)
+        if std_idx is None:
+            if verbose:
+                print(f"Skipping channel {normalized_name}")
+        else:
+            standardized[:, std_idx, :] = epoch_data[:, file_idx, :]
+            mask[std_idx] = True
+
+    # Apply normalization
+    if normalization == "recording":
+        # Normalize across all epochs using full recording stats
+        x = standardized[:, mask, :]  # (n_epochs, n_real_channels, n_times)
+        mean = x.mean(dim=(0, 2), keepdim=True)  # Mean across epochs and time
+        std = x.std(dim=(0, 2), keepdim=True)
+        standardized[:, mask, :] = (x - mean) / (std + eps)
+    elif normalization == "epoch":
+        # Normalize each epoch independently
+        x = standardized[:, mask, :]
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, keepdim=True)
+        standardized[:, mask, :] = (x - mean) / (std + eps)
+    elif normalization != "none":
+        raise ValueError(f"Unknown normalization strategy: {normalization}")
+
+    return standardized, mask

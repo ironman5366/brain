@@ -21,12 +21,14 @@ DEFAULT_MAX_TOKENS = 1024
 
 class EEGMAEConfig(BaseModel):
     encoder_dim: int
+    encoder_mlp_dim: int
+
     decoder_dim: int
+    decoder_mlp_dim: int
 
     heads: int
     depth: int
     dim_head: int
-    mlp_dim: int
 
     masking_ratio: float = DEFAULT_MASKING_RATIO
     sequence_len: int
@@ -39,10 +41,11 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         self,
         *,
         encoder_dim: int,
+        encoder_mlp_dim: int,
         decoder_dim: int,
+        decoder_mlp_dim: int,
         heads: int,
         depth: int,
-        mlp_dim: int,
         mask_on: str,
         sequence_len: int,
         masking_ratio: float,
@@ -70,7 +73,7 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
             dim=encoder_dim,
             heads=heads,
             depth=depth,
-            mlp_dim=mlp_dim,
+            mlp_dim=encoder_mlp_dim,
             dim_head=dim_head,
         )
 
@@ -79,7 +82,7 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
             dim=decoder_dim,
             heads=heads,
             depth=depth,
-            mlp_dim=mlp_dim,
+            mlp_dim=decoder_mlp_dim,
             dim_head=dim_head,
         )
         self.dec_to_seq = nn.Linear(decoder_dim, sequence_len)

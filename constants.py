@@ -14,8 +14,8 @@ DEFAULT_SFREQ = 256  # Hz
 # How should we slice windows?
 DEFAULT_WINDOW_SECONDS = 1.0
 
-# Should we normalize w.r.t the whole recording, the window of the sample, or do no normalization?
-DEFAULT_NORMALIZATION = "window"
+# Should we normalize w.r.t the whole recording, the epoch (window) of the sample, or do no normalization?
+DEFAULT_NORMALIZATION = "epoch"
 
 
 # (10-20 channel system stuff, output by claude)
