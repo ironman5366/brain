@@ -6,3 +6,4 @@ checkpoints
 **/*.env
 wandb
 prompts/
+notes/

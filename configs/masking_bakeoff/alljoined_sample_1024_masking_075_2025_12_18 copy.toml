@@ -1,0 +1,15 @@
+data_path = "/kreka/research/willy/side/brain_datasets/alljoined-window-2025-12-14/alljoined-window-2025-12-14-train.safetensors"
+dataset = "sparse"
+
+epochs = 10
+
+[mae]
+encoder_dim = 1024
+decoder_dim = 512
+masking_ratio=0.75
+depth = 6
+heads = 16
+dim_head = 64
+mask_on = "samples"
+max_tokens=256
+sequence_len=32
