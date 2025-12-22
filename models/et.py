@@ -87,6 +87,19 @@ class EEGMAE(nn.Module, PyTorchModelHubMixin):
         )
         self.dec_to_seq = nn.Linear(decoder_dim, sequence_len)
 
+    def inference(self, x):
+        # No masking, no decode
+        if self.mask_on == "samples":
+            # If we're masking on samples rather than channels, token = a value from multiple channels at a single time.
+            # So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
+            x = x.permute(0, 2, 1)
+        tokens = self.seq_to_enc(x)
+
+        positions = torch.arange(tokens.shape[1], device=x.device)
+        tokens = tokens + self.positional_embedding(positions)
+        features = self.encoder(tokens)
+        return features
+
     def forward(self, x, return_debug: bool = False):
         # X is [B, Channels, Values].
 
