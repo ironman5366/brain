@@ -32,6 +32,7 @@ class Config(BaseModel):
         typing.Literal["standard"]
         | typing.Literal["sparse"]
         | typing.Literal["sparse_classification"]
+        | typing.Literal["aj_preprocessed_classification"]
     ) = "standard"
     class_col: str | None = None
 
@@ -78,10 +79,20 @@ def train(config: Config):
             "need classifier col to train sparse classification"
         )
         dataset_kwargs["class_col"] = config.class_col
+    elif config.dataset == "aj_preprocessed_classification":
+        assert config.class_col is not None, (
+            "need classifier col to train sparse classification"
+        )
+        dataset_kwargs["class_col"] = config.class_col
+        dataset_kwargs["split"] = "train"
+
+        from data.alljoined.preprocessed import AJPreprocessedClassificationDataset
+
+        dataset_class = AJPreprocessedClassificationDataset
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
-    dataset = dataset_class(samples_path=Path(config.data_path), **dataset_kwargs)
+    dataset = dataset_class(Path(config.data_path), **dataset_kwargs)
     dataloader = DataLoader(
         dataset=dataset,
         num_workers=config.num_workers,
@@ -144,7 +155,12 @@ def train(config: Config):
                 raise ValueError(f"bad arch {config.arch}")
 
             if i % 100 == 0:
-                print(f"Loss: {l['loss']:.3f}")
+                if config.arch == "classifier":
+                    print(
+                        f"Loss: {l['loss']:.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
+                    )
+                else:
+                    print(f"Loss: {l['loss']:.3f}")
             i += 1
 
         checkpoint_dir = Path(config.checkpoint_dir) / config.name / f"epoch_{epoch}"

@@ -4,7 +4,7 @@ from pathlib import Path
 import random
 
 # Internal imports
-from data.alljoined import (
+from data.alljoined.raw import (
     fetch_alljoined,
     load_alljoined_file,
     DEFAULT_TMIN,

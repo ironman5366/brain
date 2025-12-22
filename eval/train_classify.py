@@ -3,6 +3,7 @@ from pathlib import Path
 
 # Internal imports
 from data.dataset import SparseClassificationDataset
+from data.alljoined.preprocessed import AJPreprocessedClassificationDataset
 from models.et import EEGMAE
 from models.linear_classifier import (
     LinearClassifier,
@@ -22,6 +23,11 @@ ALLJOINED_BASE_PATH = Path(
 TRAIN_PATH = ALLJOINED_BASE_PATH / "alljoined-epochs-2025-12-21-train.safetensors"
 VAL_PATH = ALLJOINED_BASE_PATH / "alljoined-epochs-2025-12-21-val.safetensors"
 
+AJ_PREPROCESSED_BASE_PATH = Path(
+    "/kreka/research/willy/side/brain_datasets/alljoined-preprocessed-combined-2025-12-22"
+)
+
+
 CHECKPOINT_PATH = Path.cwd() / "checkpoints"
 
 DEVICE = "cuda:0"
@@ -36,6 +42,13 @@ class EvalModel:
 
 class MeanPoolIdentity(EvalModel):
     input_dim = 308
+
+    def transform(self, samples):
+        return torch.mean(samples, dim=1)
+
+
+class AJPreprocessedMeanPoolIdentity(EvalModel):
+    input_dim = 250
 
     def transform(self, samples):
         return torch.mean(samples, dim=1)
@@ -66,15 +79,25 @@ def classify():
     # model = MeanPoolMAE(
     #     checkpoint_path=CHECKPOINT_PATH / "aj-epochs-channel-1024-mask-75" / "final"
     # )
-    model = MeanPoolMAE(
-        checkpoint_path=CHECKPOINT_PATH / "aj-epochs-sample-1024-mask-75" / "epoch_4"
-    )
+    # model = MeanPoolMAE(
+    #     checkpoint_path=CHECKPOINT_PATH / "aj-epochs-sample-1024-mask-75" / "epoch_4"
+    # )
     # model = MeanPoolIdentity()
+    model = AJPreprocessedMeanPoolIdentity()
+
     # Train
-    ds = SparseClassificationDataset(TRAIN_PATH, class_col="category_num")
+    # ds = SparseClassificationDataset(TRAIN_PATH, class_col="category_num")
+    # val_ds = SparseClassificationDataset(VAL_PATH, class_col="category_num")
+
+    ds = AJPreprocessedClassificationDataset(
+        AJ_PREPROCESSED_BASE_PATH, split="train", class_col="category_num"
+    )
     class_dim = ds.class_dim
 
-    val_ds = SparseClassificationDataset(VAL_PATH, class_col="category_num")
+    val_ds = AJPreprocessedClassificationDataset(
+        AJ_PREPROCESSED_BASE_PATH, split="test", class_col="category_num"
+    )
+
     assert val_ds.class_dim == ds.class_dim, (
         "Val and train DS have mismatched classification columns"
     )
@@ -93,7 +116,7 @@ def classify():
     for batch in tqdm(dl, desc="Training 1 epoch of classifier..."):
         samples, classes = batch
 
-        samples = samples.to(DEVICE)
+        samples = samples.to(DEVICE, dtype=torch.float32)
         classes = classes.to(DEVICE)
 
         samples = model.transform(samples)
@@ -118,7 +141,7 @@ def classify():
         for batch in tqdm(val_dl):
             samples, classes = batch
 
-            samples = model.transform(samples.to(DEVICE))
+            samples = model.transform(samples.to(DEVICE, dtype=torch.float32))
             classes = classes.to(DEVICE)
 
             out = classifier(samples)

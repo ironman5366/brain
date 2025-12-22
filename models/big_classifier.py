@@ -97,6 +97,12 @@ class EEGClassifierTrainer:
         self.optimizer.step()
         self.scheduler.step()
 
-        self.accelerator.log({"loss": loss, "lr": self.scheduler.get_last_lr()[0]})
+        # Compute accuracy
+        predictions = logits.argmax(dim=-1)
+        num_correct = (predictions == y).sum().item()
+        total = y.shape[0]
+        accuracy = num_correct / total
 
-        return {"loss": loss}
+        self.accelerator.log({"loss": loss, "lr": self.scheduler.get_last_lr()[0], "accuracy": accuracy})
+
+        return {"loss": loss, "num_correct": num_correct, "total": total, "accuracy": accuracy}
