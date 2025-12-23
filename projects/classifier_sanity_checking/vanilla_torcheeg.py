@@ -27,7 +27,7 @@ dataset = DEAPDataset(
     offline_transform=transforms.Compose(
         [
             transforms.BandDifferentialEntropy(apply_to_baseline=True),
-            transforms.ToGrid(DEAP_CHANNEL_LOCATION_DICT, apply_to_baseline=True),
+            # transforms.ToGrid(DEAP_CHANNEL_LOCATION_DICT, apply_to_baseline=True),
         ]
     ),
     online_transform=transforms.Compose(
