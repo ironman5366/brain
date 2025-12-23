@@ -7,7 +7,7 @@ import typing
 # Internal imports
 from data.dataset import EEGDataset, SparseDataset, SparseClassificationDataset
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
-from models.big_classifier import (
+from models.classifiers import (
     EEGClassifier,
     EEGClassifierConfig,
     EEGClassifierTrainer,
@@ -66,7 +66,14 @@ def train(config: Config):
         config=config.model_dump(),
     )
 
-    print(f"Loading dataset/dataloader from {config.data_path}...")
+    # Allow to run independently or with torchrun/accelerate launch
+    if torch.distributed.is_initialized():
+        rank = torch.distributed.get_rank()
+    else:
+        rank = 0
+
+    if rank == 0:
+        print(f"Loading dataset/dataloader from {config.data_path}...")
     dataset_kwargs = {}
 
     if config.dataset == "standard":
@@ -100,7 +107,8 @@ def train(config: Config):
         shuffle=config.shuffle,
     )
 
-    print(f"Loading {config.arch} model...")
+    if rank == 0:
+        print(f"Loading {config.arch} model...")
     if config.arch == "mae":
         assert config.mae is not None, "need MAE config to train MAE"
         model = EEGMAE.from_config(config.mae)
@@ -110,7 +118,8 @@ def train(config: Config):
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
-    print("Initialzing optimizer and scheduler..")
+    if rank == 0:
+        print("Initialzing optimizer and scheduler..")
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config.lr,
@@ -121,7 +130,8 @@ def train(config: Config):
         optimizer, num_warmup_steps=config.lr_warmup_steps
     )
 
-    print("Accelerate prepare...")
+    if rank == 0:
+        print("Accelerate prepare...")
     model, optimizer, scheduler, dataloader = accelerator.prepare(
         model, optimizer, scheduler, dataloader
     )
@@ -140,8 +150,11 @@ def train(config: Config):
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
+    accelerator.wait_for_everyone()
+
     for epoch in range(config.epochs):
-        print(f"Epoch {epoch}/{config.epochs}")
+        if rank == 0:
+            print(f"Epoch {epoch}/{config.epochs}")
         model.train()
 
         i = 0
@@ -155,17 +168,19 @@ def train(config: Config):
                 raise ValueError(f"bad arch {config.arch}")
 
             if i % 100 == 0:
-                if config.arch == "classifier":
-                    print(
-                        f"Loss: {l['loss']:.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
-                    )
-                else:
-                    print(f"Loss: {l['loss']:.3f}")
+                if rank == 0:
+                    if config.arch == "classifier":
+                        print(
+                            f"Loss: {l['loss']:.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
+                        )
+                    else:
+                        print(f"Loss: {l['loss']:.3f}")
             i += 1
 
         checkpoint_dir = Path(config.checkpoint_dir) / config.name / f"epoch_{epoch}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Checkpointing to {checkpoint_dir}...")
+        if rank == 0:
+            print(f"Checkpointing to {checkpoint_dir}...")
         _model = accelerator.unwrap_model(model)
         _model.save_pretrained(checkpoint_dir)
 

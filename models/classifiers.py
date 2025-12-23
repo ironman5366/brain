@@ -1,7 +1,7 @@
 # Builtin imports
 
 # Internal imports
-from models.transformer import AttentionPooling
+from models.transformer import Transformer
 
 # External imports
 from torch import nn
@@ -43,28 +43,38 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
         self.positional_embedding = nn.Embedding(max_tokens, encoder_dim)
 
         self.seq_to_enc = nn.Linear(sequence_len, encoder_dim)
-
-        self.encoder = AttentionPooling(
-            dim=encoder_dim,
-            num_heads=heads,
+        self.cls_token = nn.Parameter(torch.randn(1, encoder_dim))
+        self.encoder = Transformer(
+            dim=encoder_dim, heads=heads, mlp_dim=encoder_dim * 4, depth=6
         )
         self.classifier = nn.Linear(in_features=encoder_dim, out_features=num_classes)
 
-    def forward(self, x, return_debug: bool = False):
+    def forward(self, x):
         # X is [B, Channels, Values].
+        batch, channels, values = x.shape
         # So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
         x = x.permute(0, 2, 1)
 
         tokens = self.seq_to_enc(x)
+        cls_tokens = self.cls_token.expand(batch, -1, -1)
+
+        # print(f"cls tokens shape", cls_tokens.shape, "tokens shape", tokens.shape)
+        tokens = torch.cat([cls_tokens, tokens], dim=1)
+        # print(f"comb shape {tokens.shape}")
+
         positions = torch.arange(tokens.shape[1], device=tokens.device)
+
         # print(f"tokens shape {tokens.shape}")
         # print("positions shape", positions.shape)
         pos_embeds = self.positional_embedding(positions)
         # print("pos embeddings shape", pos_embeds.shape)
         tokens = tokens + pos_embeds
-        pooled_features = self.encoder(tokens)
+        encoded_features = self.encoder(tokens)
+        cls_output = encoded_features[:, 0]
+        # print(f"cls output shape {cls_output.shape}")
+        # print(f"Encoded features shape {encoded_features.shape}")
         # print(f"Pooled features shape {pooled_features.shape}")
-        predictions = self.classifier(pooled_features)
+        predictions = self.classifier(cls_output)
         return predictions
 
     @classmethod
@@ -103,6 +113,13 @@ class EEGClassifierTrainer:
         total = y.shape[0]
         accuracy = num_correct / total
 
-        self.accelerator.log({"loss": loss, "lr": self.scheduler.get_last_lr()[0], "accuracy": accuracy})
+        self.accelerator.log(
+            {"loss": loss, "lr": self.scheduler.get_last_lr()[0], "accuracy": accuracy}
+        )
 
-        return {"loss": loss, "num_correct": num_correct, "total": total, "accuracy": accuracy}
+        return {
+            "loss": loss,
+            "num_correct": num_correct,
+            "total": total,
+            "accuracy": accuracy,
+        }

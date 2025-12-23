@@ -69,8 +69,13 @@ class AttentionPooling(Module):
 
 
 class Transformer(Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.0):
+    def __init__(
+        self, dim, depth, heads, mlp_dim, dropout=0.0, dim_head: int | None = None
+    ):
         super().__init__()
+        if dim_head is None:
+            dim_head = dim // heads
+
         self.norm = nn.LayerNorm(dim)
         self.layers = ModuleList([])
 

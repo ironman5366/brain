@@ -9,5 +9,5 @@ epochs = 10
 encoder_dim = 1024
 heads = 8
 sequence_len = 32
-max_tokens = 308
+max_tokens = 1024
 num_classes = 8
