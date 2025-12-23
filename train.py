@@ -12,6 +12,14 @@ from models.big_classifier import (
     EEGClassifierConfig,
     EEGClassifierTrainer,
 )
+from models.ccnn import (
+    CCNN1DConfig,
+    CCNN1DRegressor,
+    CCNN1DRegressorTrainer,
+    CCNN1DClassifierConfig,
+    CCNN1DClassifier,
+    CCNN1DClassifierTrainer,
+)
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -33,13 +41,23 @@ class Config(BaseModel):
         | typing.Literal["sparse"]
         | typing.Literal["sparse_classification"]
         | typing.Literal["aj_preprocessed_classification"]
+        | typing.Literal["deap_regression"]
+        | typing.Literal["deap_classification"]
     ) = "standard"
     class_col: str | None = None
+    label_col: str | None = None  # For regression datasets
 
     # Model config
-    arch: typing.Literal["mae"] | typing.Literal["classifier"] = "mae"
+    arch: (
+        typing.Literal["mae"]
+        | typing.Literal["classifier"]
+        | typing.Literal["ccnn_regressor"]
+        | typing.Literal["ccnn_classifier"]
+    ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
+    ccnn: CCNN1DConfig | None = None
+    ccnn_cls: CCNN1DClassifierConfig | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -89,6 +107,26 @@ def train(config: Config):
         from data.alljoined.preprocessed import AJPreprocessedClassificationDataset
 
         dataset_class = AJPreprocessedClassificationDataset
+    elif config.dataset == "deap_regression":
+        assert config.label_col is not None, (
+            "need label_col for deap regression (e.g., valence, arousal)"
+        )
+        dataset_kwargs["label_col"] = config.label_col
+        dataset_kwargs["split"] = "train"
+
+        from data.deap import DEAPRegressionDataset
+
+        dataset_class = DEAPRegressionDataset
+    elif config.dataset == "deap_classification":
+        assert config.class_col is not None, (
+            "need class_col for deap classification (e.g., valence_high, arousal_high)"
+        )
+        dataset_kwargs["class_col"] = config.class_col
+        dataset_kwargs["split"] = "train"
+
+        from data.deap import DEAPClassificationDataset
+
+        dataset_class = DEAPClassificationDataset
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
@@ -105,8 +143,14 @@ def train(config: Config):
         assert config.mae is not None, "need MAE config to train MAE"
         model = EEGMAE.from_config(config.mae)
     elif config.arch == "classifier":
-        assert config.classifier is not None, "need class col to train classifier"
+        assert config.classifier is not None, "need classifier config to train classifier"
         model = EEGClassifier.from_config(config.classifier)
+    elif config.arch == "ccnn_regressor":
+        assert config.ccnn is not None, "need ccnn config to train ccnn_regressor"
+        model = CCNN1DRegressor.from_config(config.ccnn)
+    elif config.arch == "ccnn_classifier":
+        assert config.ccnn_cls is not None, "need ccnn_cls config to train ccnn_classifier"
+        model = CCNN1DClassifier.from_config(config.ccnn_cls)
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -137,6 +181,20 @@ def train(config: Config):
             scheduler=scheduler,
             optimizer=optimizer,
         )
+    elif config.arch == "ccnn_regressor":
+        trainer = CCNN1DRegressorTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
+    elif config.arch == "ccnn_classifier":
+        trainer = CCNN1DClassifierTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -151,14 +209,22 @@ def train(config: Config):
             elif config.arch == "classifier":
                 samples, classes = batch
                 l = trainer.step(samples, classes)
+            elif config.arch == "ccnn_regressor":
+                samples, labels = batch
+                l = trainer.step(samples, labels)
+            elif config.arch == "ccnn_classifier":
+                samples, classes = batch
+                l = trainer.step(samples, classes)
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
             if i % 100 == 0:
-                if config.arch == "classifier":
+                if config.arch == "classifier" or config.arch == "ccnn_classifier":
                     print(
                         f"Loss: {l['loss']:.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                     )
+                elif config.arch == "ccnn_regressor":
+                    print(f"Loss: {l['loss']:.3f} | MAE: {l['mae']:.2f} | Within 1pt: {l['within_1']*100:.1f}% | Binary Acc: {l['binary_acc']*100:.1f}%")
                 else:
                     print(f"Loss: {l['loss']:.3f}")
             i += 1

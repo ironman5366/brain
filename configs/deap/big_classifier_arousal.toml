@@ -1,0 +1,15 @@
+arch = "classifier"
+data_path = "/kreka/research/willy/side/brain_datasets/deap_processed"
+dataset = "deap_classification"
+class_col = "arousal_high"
+
+epochs = 10
+batch_size = 256
+lr = 1e-3
+
+[classifier]
+encoder_dim = 1024
+heads = 8
+sequence_len = 32
+max_tokens = 128
+num_classes = 2

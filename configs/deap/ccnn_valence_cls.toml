@@ -1,0 +1,14 @@
+arch = "ccnn_classifier"
+data_path = "/kreka/research/willy/side/brain_datasets/deap_processed"
+dataset = "deap_classification"
+class_col = "valence_high"
+
+epochs = 10
+batch_size = 256
+lr = 1e-3
+
+[ccnn_cls]
+in_channels = 32
+seq_len = 128
+num_classes = 2
+dropout = 0.5

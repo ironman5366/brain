@@ -1,0 +1,16 @@
+arch = "ccnn_classifier"
+data_path = "/kreka/research/willy/side/brain_datasets/alljoined-epochs-2025-12-21/alljoined-epochs-2025-12-21-train.safetensors"
+dataset = "sparse_classification"
+class_col = "super_category_id"
+
+epochs = 10
+batch_size = 256
+lr = 1e-3
+
+[ccnn_cls]
+in_channels = 32
+seq_len = 308
+num_classes = 8
+dropout = 0.5
+base_channels=256
+hidden_dim=4095

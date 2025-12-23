@@ -1,0 +1,13 @@
+arch = "ccnn_regressor"
+data_path = "/kreka/research/willy/side/brain_datasets/deap_processed"
+dataset = "deap_regression"
+label_col = "arousal"
+
+epochs = 50
+batch_size = 256
+lr = 1e-3
+
+[ccnn]
+in_channels = 32
+seq_len = 128
+dropout = 0.5
