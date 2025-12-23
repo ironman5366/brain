@@ -7,3 +7,5 @@ checkpoints
 wandb
 prompts/
 notes/
+out/
+lightning_logs
