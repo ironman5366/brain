@@ -12,6 +12,7 @@ from models.classifiers import (
     EEGClassifierConfig,
     EEGClassifierTrainer,
 )
+from models.eegnet import EEGNet, EEGNetConfig, EEGNetTrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -37,9 +38,12 @@ class Config(BaseModel):
     class_col: str | None = None
 
     # Model config
-    arch: typing.Literal["mae"] | typing.Literal["classifier"] = "mae"
+    arch: (
+        typing.Literal["mae"] | typing.Literal["classifier"] | typing.Literal["eegnet"]
+    ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
+    eegnet: EEGNetConfig | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -115,6 +119,9 @@ def train(config: Config):
     elif config.arch == "classifier":
         assert config.classifier is not None, "need class col to train classifier"
         model = EEGClassifier.from_config(config.classifier)
+    elif config.arch == "eegnet":
+        assert config.eegnet is not None, "need EEGNet config to train EEGNet"
+        model = EEGNet.from_config(config.eegnet)
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -147,10 +154,23 @@ def train(config: Config):
             scheduler=scheduler,
             optimizer=optimizer,
         )
+    elif config.arch == "eegnet":
+        trainer = EEGNetTrainer(
+            classifier=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
     accelerator.wait_for_everyone()
+
+    batch = None
+    for f in dataloader:
+        batch = f
+        print(f"Assigned batch to {f}")
+        break
 
     for epoch in range(config.epochs):
         if rank == 0:
@@ -158,10 +178,13 @@ def train(config: Config):
         model.train()
 
         i = 0
-        for batch in tqdm(dataloader):
+        for _ in tqdm(range(10 * 1000), desc="Trying to overfit"):
             if config.arch == "mae":
                 l = trainer.step(batch)
             elif config.arch == "classifier":
+                samples, classes = batch
+                l = trainer.step(samples, classes)
+            elif config.arch == "eegnet":
                 samples, classes = batch
                 l = trainer.step(samples, classes)
             else:
@@ -169,7 +192,7 @@ def train(config: Config):
 
             if i % 10 == 0:
                 if rank == 0:
-                    if config.arch == "classifier":
+                    if config.arch in ("classifier", "eegnet"):
                         print(
                             f"Loss: {l['loss']:.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                         )

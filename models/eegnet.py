@@ -1,6 +1,10 @@
 # External imports
 from torch import nn
 from pydantic import BaseModel
+from accelerate import Accelerator
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+from huggingface_hub import PyTorchModelHubMixin
 
 
 class EEGNetConfig(BaseModel):
@@ -19,7 +23,7 @@ class EEGNetConfig(BaseModel):
     dropout_rate: float = 0.5
 
 
-class EEGNet(nn.Module):
+class EEGNet(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
         *,
@@ -31,6 +35,7 @@ class EEGNet(nn.Module):
         D: int,
         dropout_rate: float,
     ):
+        super().__init__()
         # Block 1
 
         # Temporal convolution
@@ -48,7 +53,7 @@ class EEGNet(nn.Module):
         )
         self.norm2 = nn.BatchNorm2d(D * F1)
         self.activation1 = nn.ELU()
-        self.pool1 = nn.AveragePool2d(kernel_size=(1, 4))
+        self.pool1 = nn.AvgPool2d(kernel_size=(1, 4))
         self.dropout1 = nn.Dropout(dropout_rate)
 
         # Block 2
@@ -96,3 +101,46 @@ class EEGNet(nn.Module):
     @classmethod
     def from_config(cls, config: EEGNetConfig):
         return cls(**config.model_dump())
+
+
+class EEGNetTrainer:
+    def __init__(
+        self,
+        *,
+        classifier: EEGNet,
+        accelerator: Accelerator,
+        scheduler: LRScheduler,
+        optimizer: Optimizer,
+    ):
+        self.classifier = classifier
+        self.accelerator = accelerator
+        self.scheduler = scheduler
+        self.optimizer = optimizer
+        self.criterion = nn.CrossEntropyLoss()
+
+    def step(self, x, y):
+        self.optimizer.zero_grad()
+
+        logits = self.classifier(x)
+        loss = self.criterion(logits, y)
+
+        self.accelerator.backward(loss)
+        self.optimizer.step()
+        self.scheduler.step()
+
+        # Compute accuracy
+        predictions = logits.argmax(dim=-1)
+        num_correct = (predictions == y).sum().item()
+        total = y.shape[0]
+        accuracy = num_correct / total
+
+        self.accelerator.log(
+            {"loss": loss, "lr": self.scheduler.get_last_lr()[0], "accuracy": accuracy}
+        )
+
+        return {
+            "loss": loss,
+            "num_correct": num_correct,
+            "total": total,
+            "accuracy": accuracy,
+        }
