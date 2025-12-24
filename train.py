@@ -166,19 +166,13 @@ def train(config: Config):
 
     accelerator.wait_for_everyone()
 
-    batch = None
-    for f in dataloader:
-        batch = f
-        print(f"Assigned batch to {f}")
-        break
-
     for epoch in range(config.epochs):
         if rank == 0:
             print(f"Epoch {epoch}/{config.epochs}")
         model.train()
 
         i = 0
-        for _ in tqdm(range(10 * 1000), desc="Trying to overfit"):
+        for batch in tqdm(dataloader):
             if config.arch == "mae":
                 l = trainer.step(batch)
             elif config.arch == "classifier":
