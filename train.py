@@ -167,7 +167,7 @@ def train(config: Config):
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
-            if i % 100 == 0:
+            if i % 10 == 0:
                 if rank == 0:
                     if config.arch == "classifier":
                         print(

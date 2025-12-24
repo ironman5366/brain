@@ -6,7 +6,7 @@ class_col = "super_category_id"
 epochs = 10
 
 [classifier]
-encoder_dim = 1024
+encoder_dim = 2048
 heads = 8
 sequence_len = 32
 max_tokens = 1024

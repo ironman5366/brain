@@ -24,6 +24,36 @@ class EEGClassifierConfig(BaseModel):
     num_classes: int
 
 
+class EEGNetTokenizer(nn.Module):
+    def __init__(self, num_channels: int, encoder_dim: int, F1: int = 16, D: int = 2):
+        super().__init__()
+        F2 = F1 * D
+
+        # Temporal conv with stride to create non-overlapping "patches"
+        self.temporal_conv = nn.Conv2d(
+            1,
+            F1,
+            (1, 64),
+        )
+        self.bn1 = nn.BatchNorm2d(F1)
+        self.depthwise_conv = nn.Conv2d(
+            F1, F2, (num_channels, 1), groups=F1, bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(F2)
+        self.elu = nn.ELU()
+
+        self.proj = nn.Linear(F2, encoder_dim)
+
+    def forward(self, x):
+        # (B, C, T) -> (B, 1, C, T)
+        x = x.unsqueeze(dim=1)
+        x = self.elu(self.bn1(self.temporal_conv(x)))
+        x = self.elu(self.bn2(self.depthwise_conv(x)))
+        # x: (B, F2, 1, num_tokens)
+        x = x.squeeze(2).permute(0, 2, 1)  # (B, num_tokens, F2)
+        return self.proj(x)  # (B, num_tokens, encoder_dim)
+
+
 class EEGClassifier(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
@@ -37,12 +67,13 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
         super().__init__()
         self.encoder_dim = encoder_dim
 
-        # Which position of the sequence we're in - if we mask on channels corresponds to the channel index, if samples, corresponds to the timestep
-        # TODO: replace with something rope-like for variable sequence length
-        # TODO: should I have a separate embedding here for the decoder?
+        # Which position of the time sequence we're in.
         self.positional_embedding = nn.Embedding(max_tokens, encoder_dim)
 
-        self.seq_to_enc = nn.Linear(sequence_len, encoder_dim)
+        self.tokenizer = EEGNetTokenizer(
+            num_channels=sequence_len, encoder_dim=encoder_dim
+        )
+        # self.seq_to_enc = nn.Linear(sequence_len, encoder_dim)
         self.cls_token = nn.Parameter(torch.randn(1, encoder_dim))
         self.encoder = Transformer(
             dim=encoder_dim, heads=heads, mlp_dim=encoder_dim * 4, depth=6
@@ -50,30 +81,25 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
         self.classifier = nn.Linear(in_features=encoder_dim, out_features=num_classes)
 
     def forward(self, x):
-        # X is [B, Channels, Values].
+        # X is [B, Channels, Values]. We want each input to the transformer to be a timeslice along all channels
         batch, channels, values = x.shape
-        # So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
-        x = x.permute(0, 2, 1)
 
-        tokens = self.seq_to_enc(x)
+        # So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
+        # x = x.permute(0, 2, 1)
+        # tokens = self.seq_to_enc(x)
+
+        tokens = self.tokenizer(x)
         cls_tokens = self.cls_token.expand(batch, -1, -1)
 
-        # print(f"cls tokens shape", cls_tokens.shape, "tokens shape", tokens.shape)
         tokens = torch.cat([cls_tokens, tokens], dim=1)
-        # print(f"comb shape {tokens.shape}")
 
         positions = torch.arange(tokens.shape[1], device=tokens.device)
 
-        # print(f"tokens shape {tokens.shape}")
-        # print("positions shape", positions.shape)
         pos_embeds = self.positional_embedding(positions)
-        # print("pos embeddings shape", pos_embeds.shape)
         tokens = tokens + pos_embeds
         encoded_features = self.encoder(tokens)
         cls_output = encoded_features[:, 0]
-        # print(f"cls output shape {cls_output.shape}")
-        # print(f"Encoded features shape {encoded_features.shape}")
-        # print(f"Pooled features shape {pooled_features.shape}")
+
         predictions = self.classifier(cls_output)
         return predictions
 
