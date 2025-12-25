@@ -63,17 +63,24 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
         sequence_len: int,
         max_tokens: int,
         num_classes: int,
+        tokenizer_method: str = "linear",
     ):
         super().__init__()
         self.encoder_dim = encoder_dim
+        self.tokenizer_method = tokenizer_method
 
         # Which position of the time sequence we're in.
         self.positional_embedding = nn.Embedding(max_tokens, encoder_dim)
 
-        self.tokenizer = EEGNetTokenizer(
-            num_channels=sequence_len, encoder_dim=encoder_dim
-        )
-        # self.seq_to_enc = nn.Linear(sequence_len, encoder_dim)
+        if self.tokenizer_method == "linear":
+            self.seq_to_enc = nn.Linear(sequence_len, encoder_dim)
+        elif self.tokenizer_method == "eegnet":
+            self.tokenizer = EEGNetTokenizer(
+                num_channels=sequence_len, encoder_dim=encoder_dim
+            )
+        else:
+            raise ValueError()
+
         self.cls_token = nn.Parameter(torch.randn(1, encoder_dim))
         self.encoder = Transformer(
             dim=encoder_dim, heads=heads, mlp_dim=encoder_dim * 4, depth=6
@@ -81,13 +88,15 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
         self.classifier = nn.Linear(in_features=encoder_dim, out_features=num_classes)
 
     def forward(self, x):
+        x = x.float()
         # X is [B, Channels, Values]. We want each input to the transformer to be a timeslice along all channels
         batch, channels, values = x.shape
 
         # So we permute to [B, Values, Channels], and then project channels -> dim to get [Values] tokens
-        # x = x.permute(0, 2, 1)
-        # tokens = self.seq_to_enc(x)
+        if self.tokenizer_method == "linear":
+            x = x.permute(0, 2, 1)
 
+        # tokens = self.seq_to_enc(x)
         tokens = self.tokenizer(x)
         cls_tokens = self.cls_token.expand(batch, -1, -1)
 

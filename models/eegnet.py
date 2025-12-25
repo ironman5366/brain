@@ -72,6 +72,7 @@ class EEGNet(nn.Module, PyTorchModelHubMixin):
         self.dense = nn.Linear(F2 * (num_samples // 32), num_classes)
 
     def forward(self, x):
+        x = x.float()
         # X of shape [B, Channels, Values]
         # Start by reshaping to (B, 1, C, V)
         x = x.unsqueeze(dim=1)
