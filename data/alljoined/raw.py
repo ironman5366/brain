@@ -16,39 +16,9 @@ import torch
 # Location you've downloaded https://huggingface.co/datasets/Alljoined/Alljoined-1.6M
 ALLJOINED_BASE_DIR = Path("/kreka/research/willy/side/alljoined")
 
-# Default epoch timing (to match Alljoined preprocessing)
-DEFAULT_TMIN = -0.2  # 200ms before stimulus
-DEFAULT_TMAX = 1.0  # 1s after stimulus
-
-
-def parse_markers(json_path: Path | str) -> list[dict]:
-    """
-    Parse JSON metadata file to extract stimulus and behavioral markers.
-
-    Returns list of dicts with keys:
-        - label: "stim_test", "stim_train", "behav", or "oddball"
-        - image_id: int (for stim markers) or response code (for behav)
-        - index: sequence number
-        - start_datetime: ISO timestamp string
-    """
-    json_path = Path(json_path)
-    if not json_path.exists():
-        return []
-
-    data = json.loads(json_path.read_text())
-    markers = []
-
-    for m in data.get("Markers", []):
-        markers.append(
-            {
-                "label": m["label"],
-                "image_id": m["value"],
-                "index": m["index"],
-                "start_datetime": m["startDatetime"],
-            }
-        )
-
-    return markers
+# Differs from AJ timing - cts off earlier and starts after. Intends to only isolate the signal we're actually looking for
+DEFAULT_TMIN = -0.1  # 100ms before stimulus
+DEFAULT_TMAX = 0.2  # 200ms after stimulus
 
 
 def load_experiment_metadata(subject_num: int) -> dict[int, dict] | None:

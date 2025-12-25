@@ -77,7 +77,7 @@ def build():
         num_cpus=128,
     )
 
-    config = DatasetConfig(name="alljoined-epochs-2025-12-21")
+    config = DatasetConfig(name="alljoined-isolated-epochs-2025-12-25")
 
     all_samples = []
     mask_indices = None
