@@ -1,0 +1,14 @@
+arch = "eegnet"
+data_path = "/kreka/research/willy/side/brain_datasets/alljoined-isolated-epochs-2025-12-25/alljoined-isolated-epochs-2025-12-25-train.safetensors"
+dataset = "sparse_classification"
+class_col = "super_category_id"
+
+epochs = 100
+
+[eegnet]
+num_channels = 32
+num_samples = 78
+num_classes = 8
+F1=128
+F2=256
+D=4

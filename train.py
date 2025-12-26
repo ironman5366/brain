@@ -40,7 +40,10 @@ class Config(BaseModel):
 
     # Model config
     arch: (
-        typing.Literal["mae"] | typing.Literal["classifier"] | typing.Literal["eegnet"] | typing.Literal["nice_eeg"]
+        typing.Literal["mae"]
+        | typing.Literal["classifier"]
+        | typing.Literal["eegnet"]
+        | typing.Literal["nice_eeg"]
     ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
@@ -177,8 +180,11 @@ def train(config: Config):
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
-    accelerator.wait_for_everyone()
+    if rank == 0:
+        param_count = sum(p.numel() for p in model.parameters())
+        print(f"Model has {param_count:,} parameters")
 
+    accelerator.wait_for_everyone()
     for epoch in range(config.epochs):
         if rank == 0:
             print(f"Epoch {epoch}/{config.epochs}")
@@ -200,7 +206,7 @@ def train(config: Config):
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
-            if i % 100 == 0:
+            if i % 10 == 0:
                 if rank == 0:
                     if config.arch in ("classifier", "eegnet", "nice_eeg"):
                         print(

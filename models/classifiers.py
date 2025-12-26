@@ -25,7 +25,9 @@ class EEGClassifierConfig(BaseModel):
 
     num_classes: int
 
-    tokenizer_method: Literal["linear"] | Literal["eegnet"]
+    tokenizer_method: Literal["linear"] | Literal["eegnet"] = "linear"
+    classifier_method: Literal["linear"] | Literal["mlp"] = "linear"
+    dropout_rate: float = 0.3
 
 
 class EEGNetTokenizer(nn.Module):
@@ -67,7 +69,9 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
         sequence_len: int,
         max_tokens: int,
         num_classes: int,
-        tokenizer_method: str = "linear",
+        tokenizer_method: str,
+        classifier_method: str,
+        dropout_rate: float,
     ):
         super().__init__()
         self.encoder_dim = encoder_dim
@@ -89,7 +93,23 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
         self.encoder = Transformer(
             dim=encoder_dim, heads=heads, mlp_dim=encoder_dim * 4, depth=6
         )
-        self.classifier = nn.Linear(in_features=encoder_dim, out_features=num_classes)
+
+        if classifier_method == "linear":
+            self.classifier = nn.Linear(
+                in_features=encoder_dim, out_features=num_classes
+            )
+        elif classifier_method == "mlp":
+            self.classifier = nn.Sequential(
+                nn.Linear(encoder_dim, encoder_dim * 2),
+                nn.GELU(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(encoder_dim * 2, encoder_dim),
+                nn.GELU(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(encoder_dim, num_classes),
+            )
+        else:
+            raise ValueError()
 
     def forward(self, x):
         x = x.float()

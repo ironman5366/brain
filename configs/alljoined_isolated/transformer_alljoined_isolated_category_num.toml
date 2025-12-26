@@ -1,0 +1,17 @@
+arch = "classifier"
+data_path = "/kreka/research/willy/side/brain_datasets/alljoined-isolated-epochs-2025-12-25/alljoined-isolated-epochs-2025-12-25-train.safetensors"
+dataset = "sparse_classification"
+class_col = "category_num"
+
+epochs = 100
+batch_size=1024
+
+[classifier]
+encoder_dim=1024
+heads=8
+sequence_len = 32
+# We have 78, we'll add a class token, give some overhead
+max_tokens = 128
+num_classes = 1654
+tokenizer_method = "linear"
+classifier_method="mlp"

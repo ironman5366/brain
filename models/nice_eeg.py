@@ -107,7 +107,13 @@ class ResidualAdd(nn.Module):
 
 
 class channel_attention(nn.Module):
-    def __init__(self, sequence_num=250, inter=30):
+    def __init__(
+        self,
+        sequence_num,
+        num_channels,
+        dropout_rate,
+        inter=30,
+    ):
         super(channel_attention, self).__init__()
         self.sequence_num = sequence_num
         self.inter = inter
@@ -115,13 +121,21 @@ class channel_attention(nn.Module):
             self.sequence_num / self.inter
         )  # You could choose to do that for less computation
 
-        self.query = nn.Sequential(nn.Linear(64, 64), nn.LayerNorm(64), nn.Dropout(0.3))
-        self.key = nn.Sequential(nn.Linear(64, 64), nn.LayerNorm(64), nn.Dropout(0.3))
+        self.query = nn.Sequential(
+            nn.Linear(num_channels, num_channels),
+            nn.LayerNorm(num_channels),
+            nn.Dropout(dropout_rate),
+        )
+        self.key = nn.Sequential(
+            nn.Linear(num_channels, num_channels),
+            nn.LayerNorm(num_channels),
+            nn.Dropout(dropout_rate),
+        )
 
         self.projection = nn.Sequential(
-            nn.Linear(64, 64),
-            nn.LayerNorm(64),
-            nn.Dropout(0.3),
+            nn.Linear(num_channels, num_channels),
+            nn.LayerNorm(num_channels),
+            nn.Dropout(dropout_rate),
         )
 
         self.drop_out = nn.Dropout(0)
@@ -294,7 +308,12 @@ class Enc_EEG(nn.Module, PyTorchModelHubMixin):
 
         if spatial == "channel":
             spatial_module = nn.Sequential(
-                nn.LayerNorm(sequence_len), channel_attention(sequence_num=sequence_len)
+                nn.LayerNorm(sequence_len),
+                channel_attention(
+                    sequence_num=sequence_len,
+                    num_channels=num_channels,
+                    dropout_rate=dropout_rate,
+                ),
             )
         elif spatial == "ga":
             spatial_module = EEG_GAT(
@@ -314,8 +333,8 @@ class Enc_EEG(nn.Module, PyTorchModelHubMixin):
         )
         self.emb = SmallPatchEmbedding(emb_size, num_channels=num_channels)
         self.flatten = nn.Flatten()
-        # This is 2160 is a somewhat magical number from the weird patch embedding conv shit. Might get rid of it entirely
-        self.proj = nn.Linear(in_features=2160, out_features=num_classes)
+        # This 2160 is a somewhat magical number from the weird patch embedding conv shit. Might get rid of it entirely
+        self.proj = nn.Linear(in_features=216000, out_features=num_classes)
 
     def forward(self, x):
         # Add channel dimension if needed: (B, C, T) -> (B, 1, C, T)

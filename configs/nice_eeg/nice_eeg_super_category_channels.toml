@@ -3,6 +3,8 @@ data_path = "/kreka/research/willy/side/brain_datasets/alljoined-isolated-epochs
 dataset = "sparse_classification"
 class_col = "super_category_id"
 
+epochs = 100
+
 [nice_eeg]
 spatial = "channel"
 emb_size = 40
