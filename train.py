@@ -5,7 +5,7 @@ import sys
 import typing
 
 # Internal imports
-from data.dataset import EEGDataset, SparseDataset, SparseClassificationDataset
+from data.dataset import MaskedEEGDataset, SparseDataset, SparseClassificationDataset
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
     EEGClassifier,
@@ -35,6 +35,7 @@ class Config(BaseModel):
         | typing.Literal["sparse"]
         | typing.Literal["sparse_classification"]
         | typing.Literal["aj_preprocessed_classification"]
+        | typing.Literal["things_eeg_classification"]
     ) = "standard"
     class_col: str | None = None
 
@@ -86,7 +87,7 @@ def train(config: Config):
     dataset_kwargs = {}
 
     if config.dataset == "standard":
-        dataset_class = EEGDataset
+        dataset_class = MaskedEEGDataset
     elif config.dataset == "sparse":
         dataset_class = SparseDataset
     elif config.dataset == "sparse_classification":
@@ -105,6 +106,14 @@ def train(config: Config):
         from data.alljoined.preprocessed import AJPreprocessedClassificationDataset
 
         dataset_class = AJPreprocessedClassificationDataset
+    elif config.dataset == "things_eeg_classification":
+        from data.dataset import ThingsEEGClassificationDataset
+
+        assert config.class_col is not None, (
+            "need classifier col to train things eeg classification"
+        )
+        dataset_kwargs["class_col"] = config.class_col
+        dataset_class = ThingsEEGClassificationDataset
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 

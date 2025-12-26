@@ -10,7 +10,7 @@ sys.path.append(str(Path.cwd().parent))
 print("appended", str(Path.cwd().parent))
 
 from models.et import EEGMAE
-from data.dataset import EEGDataset, SparseDataset
+from data.dataset import MaskedEEGDataset, SparseDataset
 
 st.set_page_config(page_title="MAE Reconstruction Viewer", layout="wide")
 
@@ -88,7 +88,7 @@ def load_model(checkpoint_path: str):
 def load_dataset(dataset_path: str):
     """Load EEG dataset. Returns sparse dataset for model, but keeps mask for visualization."""
     # Use EEGDataset to get the mask, but we'll use sparse data for model inference
-    dense_ds = EEGDataset(Path(dataset_path))
+    dense_ds = MaskedEEGDataset(Path(dataset_path))
     sparse_ds = SparseDataset(Path(dataset_path))
     return sparse_ds, dense_ds.mask
 
@@ -261,9 +261,7 @@ if st.session_state.viz_active and checkpoint_path and dataset_path:
             masked_set = set(masked_indices)
             for i, ch_idx in enumerate(active_channel_indices):
                 # Plot original in blue (sparse indexing)
-                axes2[i].plot(
-                    time, original[i], linewidth=0.5, color=COLOR_ORIGINAL
-                )
+                axes2[i].plot(time, original[i], linewidth=0.5, color=COLOR_ORIGINAL)
                 axes2[i].set_ylabel(f"Ch {ch_idx}", fontsize=8)
                 axes2[i].tick_params(axis="y", labelsize=6)
                 axes2[i].set_xlim(0, sample_len)
@@ -321,9 +319,7 @@ if st.session_state.viz_active and checkpoint_path and dataset_path:
             masked_set = set(masked_indices)
             for i, ch_idx in enumerate(active_channel_indices):
                 # Plot full original (sparse indexing)
-                axes3[i].plot(
-                    time, original[i], linewidth=0.5, color=COLOR_ORIGINAL
-                )
+                axes3[i].plot(time, original[i], linewidth=0.5, color=COLOR_ORIGINAL)
                 # Overlay reconstructed at masked positions
                 recon_vals = np.full(sample_len, np.nan)
                 for t in masked_indices:

@@ -4,7 +4,7 @@ from pathlib import Path
 # Internal imports
 from models.vit import EEGViT
 from models.mae import EEGViTMAE
-from data.dataset import EEGDataset
+from data.dataset import MaskedEEGDataset
 
 # External imports
 import torch
@@ -14,7 +14,7 @@ def main():
     data_path = Path(
         "/kreka/research/willy/side/brain_datasets/alljoined-2025-12-13/alljoined-2025-12-13-val.safetensors"
     )
-    ds = EEGDataset(data_path)
+    ds = MaskedEEGDataset(data_path)
     first_sample = ds[0].unsqueeze(0)
     print(f"First sample shape {first_sample.shape}")
 

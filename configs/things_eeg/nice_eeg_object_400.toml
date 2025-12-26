@@ -1,0 +1,14 @@
+arch = "nice_eeg"
+data_path = "/kreka/research/willy/side/brain_datasets/things/things-processed-fixed-v2-2025-12-26/things-processed-fixed-v2-2025-12-26.safetensors"
+dataset = "things_eeg_classification"
+class_col = "object"
+
+batch_size = 1024
+
+[nice_eeg]
+spatial = "ga"  # or "sa" for self-attention
+emb_size = 400
+num_classes = 1854
+dropout_rate = 0.3
+sequence_len=151
+num_channels=63

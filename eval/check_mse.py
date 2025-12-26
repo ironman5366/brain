@@ -2,7 +2,7 @@
 from pathlib import Path
 
 # Internal imports
-from data.dataset import EEGDataset, SparseDataset
+from data.dataset import MaskedEEGDataset, SparseDataset
 from models.et import EEGMAE
 
 # External imports

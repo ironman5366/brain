@@ -333,8 +333,9 @@ class Enc_EEG(nn.Module, PyTorchModelHubMixin):
         )
         self.emb = SmallPatchEmbedding(emb_size, num_channels=num_channels)
         self.flatten = nn.Flatten()
-        # This 2160 is a somewhat magical number from the weird patch embedding conv shit. Might get rid of it entirely
-        self.proj = nn.Linear(in_features=216000, out_features=num_classes)
+
+        # TODO: I don't quite understnad where this comes from, the emb is part of it
+        self.proj = nn.Linear(in_features=127 * emb_size, out_features=num_classes)
 
     def forward(self, x):
         # Add channel dimension if needed: (B, C, T) -> (B, 1, C, T)
@@ -343,7 +344,9 @@ class Enc_EEG(nn.Module, PyTorchModelHubMixin):
 
         x = self.spatial_block(x)
         x = self.emb(x)
+        # print(f"Emb shape {x.shape}")
         x = self.flatten(x)
+        # print(f"Post flatten shape {x.shape}")
         x = self.proj(x)
 
         return x
