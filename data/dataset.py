@@ -73,5 +73,4 @@ class SparseClassificationDataset(SparseMetadataDataset):
         row = self.metadata[idx]
         row_class = row.select(self.class_col)[0].item()
         row_it = self.vals_to_ids[row_class]
-        # print(f"{row_class} = {row_it}")
         return tensor, torch.tensor(row_it, dtype=torch.long)

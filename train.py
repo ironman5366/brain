@@ -104,6 +104,7 @@ def train(config: Config):
         raise ValueError(f"Unknown dataset {config.dataset}")
 
     dataset = dataset_class(Path(config.data_path), **dataset_kwargs)
+    print(f"Using shuffle={config.shuffle}")
     dataloader = DataLoader(
         dataset=dataset,
         num_workers=config.num_workers,
@@ -169,7 +170,7 @@ def train(config: Config):
     for epoch in range(config.epochs):
         if rank == 0:
             print(f"Epoch {epoch}/{config.epochs}")
-        model.train()
+        model.train(True)
 
         i = 0
         for batch in tqdm(dataloader):
@@ -184,11 +185,11 @@ def train(config: Config):
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
-            if i % 10 == 0:
+            if i % 100 == 0:
                 if rank == 0:
                     if config.arch in ("classifier", "eegnet"):
                         print(
-                            f"Loss: {l['loss']:.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
+                            f"Loss: {l['loss'].item():.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                         )
                     else:
                         print(f"Loss: {l['loss']:.3f}")

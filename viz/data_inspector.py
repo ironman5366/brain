@@ -18,7 +18,7 @@ st.title("EEG Data Inspector")
 st.write("Visualize epoch-based EEG data with metadata from safetensors files")
 
 # Constants
-DEFAULT_PATH = "/kreka/research/willy/side/brain_datasets/alljoined-epochs-2025-12-21/alljoined-epochs-2025-12-21-val.safetensors"
+DEFAULT_PATH = "/kreka/research/willy/side/brain_datasets/alljoined-isolated-epochs-2025-12-25/alljoined-isolated-epochs-2025-12-25-val.safetensors"
 COLOR_SIGNAL = "#1f77b4"
 
 
@@ -81,7 +81,9 @@ if dataset_path:
             num_channels = len(channel_names)
             seq_len = tensors.shape[2]
 
-            st.caption(f"Shape: {tensors.shape} | Channels: {num_channels} | Sequence length: {seq_len}")
+            st.caption(
+                f"Shape: {tensors.shape} | Channels: {num_channels} | Sequence length: {seq_len}"
+            )
 
             # Filters
             if metadata_df is not None:
@@ -90,17 +92,31 @@ if dataset_path:
 
                     # Get unique values for filters (handle None values)
                     partition_opts = sorted(
-                        [v for v in metadata_df["partition"].unique().to_list() if v is not None]
+                        [
+                            v
+                            for v in metadata_df["partition"].unique().to_list()
+                            if v is not None
+                        ]
                     )
                     subject_opts = sorted(
-                        [v for v in metadata_df["subject"].unique().to_list() if v is not None]
+                        [
+                            v
+                            for v in metadata_df["subject"].unique().to_list()
+                            if v is not None
+                        ]
                     )
 
                     # Super category might not exist in all datasets
                     super_cat_opts = []
                     if "super_category" in metadata_df.columns:
                         super_cat_opts = sorted(
-                            [v for v in metadata_df["super_category"].unique().to_list() if v is not None]
+                            [
+                                v
+                                for v in metadata_df["super_category"]
+                                .unique()
+                                .to_list()
+                                if v is not None
+                            ]
                         )
 
                     with col1:
@@ -125,11 +141,17 @@ if dataset_path:
                 # Apply filters
                 filtered_df = metadata_df
                 if selected_partitions:
-                    filtered_df = filtered_df.filter(pl.col("partition").is_in(selected_partitions))
+                    filtered_df = filtered_df.filter(
+                        pl.col("partition").is_in(selected_partitions)
+                    )
                 if selected_categories and "super_category" in filtered_df.columns:
-                    filtered_df = filtered_df.filter(pl.col("super_category").is_in(selected_categories))
+                    filtered_df = filtered_df.filter(
+                        pl.col("super_category").is_in(selected_categories)
+                    )
                 if selected_subjects:
-                    filtered_df = filtered_df.filter(pl.col("subject").is_in(selected_subjects))
+                    filtered_df = filtered_df.filter(
+                        pl.col("subject").is_in(selected_subjects)
+                    )
 
                 # Get valid indices (row indices in filtered df map to tensor indices)
                 valid_indices = list(range(len(filtered_df)))
@@ -157,23 +179,25 @@ if dataset_path:
                         f"Sample index (0 to {total_filtered - 1}):",
                         min_value=0,
                         max_value=total_filtered - 1,
-                        value=st.session_state.sample_idx,
-                        key="sample_input",
+                        key="sample_idx",
                     )
-                    st.session_state.sample_idx = sample_idx
 
                 with col2:
                     st.write("")  # Spacing
                     st.write("")
                     if st.button("Random Sample"):
-                        st.session_state.sample_idx = random.randint(0, total_filtered - 1)
+                        st.session_state.sample_idx = random.randint(
+                            0, total_filtered - 1
+                        )
                         st.rerun()
 
                 # Get actual tensor index
                 if filtered_df is not None and metadata_df is not None:
                     # Map filtered index back to original index
                     # The filtered_df maintains row order, so we need the original row index
-                    actual_idx = filtered_df.row(sample_idx, named=True).get("epoch_idx", sample_idx)
+                    actual_idx = filtered_df.row(sample_idx, named=True).get(
+                        "epoch_idx", sample_idx
+                    )
                     if actual_idx is None:
                         actual_idx = sample_idx  # Fallback
                 else:
@@ -188,9 +212,18 @@ if dataset_path:
                         row = filtered_df.row(sample_idx, named=True)
                         # Display key metadata fields
                         display_fields = [
-                            "image_id", "partition", "category_name", "super_category",
-                            "subject", "session", "block", "onset", "seq_num",
-                            "category_num", "super_category_id", "epoch_idx"
+                            "image_id",
+                            "partition",
+                            "category_name",
+                            "super_category",
+                            "subject",
+                            "session",
+                            "block",
+                            "onset",
+                            "seq_num",
+                            "category_num",
+                            "super_category_id",
+                            "epoch_idx",
                         ]
                         for field in display_fields:
                             if field in row and row[field] is not None:
@@ -212,7 +245,8 @@ if dataset_path:
 
                     # Create figure
                     fig, axes = plt.subplots(
-                        num_channels, 1,
+                        num_channels,
+                        1,
                         figsize=(14, num_channels * 0.6),
                         sharex=True,
                     )
@@ -238,6 +272,7 @@ if dataset_path:
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             import traceback
+
             st.code(traceback.format_exc())
 else:
     st.info("Please enter the path to a safetensors file to get started.")

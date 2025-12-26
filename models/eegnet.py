@@ -37,6 +37,7 @@ class EEGNet(nn.Module, PyTorchModelHubMixin):
     ):
         super().__init__()
         # Block 1
+        print(f"Using dropout rate {dropout_rate}")
 
         # Temporal convolution
         self.conv1 = nn.Conv2d(
@@ -53,7 +54,7 @@ class EEGNet(nn.Module, PyTorchModelHubMixin):
         )
         self.norm2 = nn.BatchNorm2d(D * F1)
         self.activation1 = nn.ELU()
-        self.pool1 = nn.AvgPool2d(kernel_size=(1, 4))
+        self.pool1 = nn.AvgPool2d(kernel_size=(1, 2))
         self.dropout1 = nn.Dropout(dropout_rate)
 
         # Block 2
@@ -63,13 +64,13 @@ class EEGNet(nn.Module, PyTorchModelHubMixin):
         self.separable_pointwise = nn.Conv2d(D * F1, F2, kernel_size=(1, 1))
         self.norm3 = nn.BatchNorm2d(F2)
         self.activation2 = nn.ELU()
-        self.pool2 = nn.AvgPool2d(kernel_size=(1, 8))
+        self.pool2 = nn.AvgPool2d(kernel_size=(1, 2))
         self.dropout2 = nn.Dropout(dropout_rate)
 
         # Classifier
         self.flatten = nn.Flatten()
         # Output size after pooling: F2 * (T // 32)
-        self.dense = nn.Linear(F2 * (num_samples // 32), num_classes)
+        self.dense = nn.Linear(F2 * (num_samples // 4), num_classes)
 
     def forward(self, x):
         # X of shape [B, Channels, Values]
@@ -125,6 +126,13 @@ class EEGNetTrainer:
         loss = self.criterion(logits, y)
 
         self.accelerator.backward(loss)
+
+        # total_grad_norm = 0
+        # for p in self.classifier.parameters():
+        #     if p.grad is not None:
+        #         total_grad_norm += p.grad.norm().item() ** 2
+        # print(f"Total grad norm: {total_grad_norm**0.5:.6f}")
+
         self.optimizer.step()
         self.scheduler.step()
 
