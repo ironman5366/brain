@@ -13,6 +13,7 @@ from models.classifiers import (
     EEGClassifierTrainer,
 )
 from models.eegnet import EEGNet, EEGNetConfig, EEGNetTrainer
+from models.nice_eeg import Enc_EEG, EncEEGConfig, EncEEGTrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -39,11 +40,12 @@ class Config(BaseModel):
 
     # Model config
     arch: (
-        typing.Literal["mae"] | typing.Literal["classifier"] | typing.Literal["eegnet"]
+        typing.Literal["mae"] | typing.Literal["classifier"] | typing.Literal["eegnet"] | typing.Literal["nice_eeg"]
     ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
     eegnet: EEGNetConfig | None = None
+    nice_eeg: EncEEGConfig | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -123,6 +125,9 @@ def train(config: Config):
     elif config.arch == "eegnet":
         assert config.eegnet is not None, "need EEGNet config to train EEGNet"
         model = EEGNet.from_config(config.eegnet)
+    elif config.arch == "nice_eeg":
+        assert config.nice_eeg is not None, "need EncEEG config to train nice_eeg"
+        model = Enc_EEG.from_config(config.nice_eeg)
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -162,6 +167,13 @@ def train(config: Config):
             scheduler=scheduler,
             optimizer=optimizer,
         )
+    elif config.arch == "nice_eeg":
+        trainer = EncEEGTrainer(
+            classifier=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -182,12 +194,15 @@ def train(config: Config):
             elif config.arch == "eegnet":
                 samples, classes = batch
                 l = trainer.step(samples, classes)
+            elif config.arch == "nice_eeg":
+                samples, classes = batch
+                l = trainer.step(samples, classes)
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
             if i % 100 == 0:
                 if rank == 0:
-                    if config.arch in ("classifier", "eegnet"):
+                    if config.arch in ("classifier", "eegnet", "nice_eeg"):
                         print(
                             f"Loss: {l['loss'].item():.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                         )
