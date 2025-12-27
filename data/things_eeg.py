@@ -15,8 +15,6 @@ BASE_PATH = Path(
 )
 OUT_DIR = Path("/kreka/research/willy/side/brain_datasets/things/")
 
-NAME = "things-processed-fixed-v2-2025-12-26"
-
 EXPECTED_CH_NAMES = {
     "Fp1",
     "Fz",
@@ -154,7 +152,7 @@ def load_sub(sub: Path):
     return sub_data, metadata
 
 
-def build_ds():
+def build_ds(name: str, subs_limit: int | None):
     print("Starting ray...")
     ray.init()
 
@@ -163,7 +161,10 @@ def build_ds():
             [x for x in BASE_PATH.iterdir() if x.name.startswith("sub-") and x.is_dir()]
         )
     )
-    print(f"Found {len(subs)} subs")
+    if subs_limit is not None:
+        subs = [x for x in subs if int(x.name.split("-")[1]) <= subs_limit]
+
+    print(f"Found {len(subs)} subs (limit {subs_limit})")
 
     load_sub_remote = ray.remote(num_cpus=8)(load_sub)
     futs = []
@@ -203,18 +204,18 @@ def build_ds():
     # TODO: train/test split
     print(f"Loaded {all_data.shape} data")
 
-    parent = OUT_DIR / NAME
+    parent = OUT_DIR / name
     parent.mkdir(exist_ok=True, parents=True)
 
-    data_file = parent / f"{NAME}.safetensors"
+    data_file = parent / f"{name}.safetensors"
     save_file({"samples": all_data}, data_file)
     print(f"Saed samples to {data_file}")
 
-    metadata_file = parent / f"{NAME}-metadata.parquet"
+    metadata_file = parent / f"{name}-metadata.parquet"
     all_metadata.write_parquet(metadata_file)
 
     print(f"Saved metadata to {metadata_file}")
 
 
 if __name__ == "__main__":
-    build_ds()
+    build_ds("things-5-subs-2025-12-27", subs_limit=5)
