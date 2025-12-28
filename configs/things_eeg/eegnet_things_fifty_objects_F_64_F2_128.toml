@@ -1,0 +1,14 @@
+arch = "eegnet"
+data_path = "/kreka/research/willy/side/brain_datasets/things/fifty_objects/fifty_objects.safetensors"
+dataset = "things_eeg_classification"
+class_col = "objectnumber"
+
+epochs = 100
+
+[eegnet]
+num_channels = 63
+num_samples = 151
+num_classes = 50
+F1=64
+F2=128
+D=16

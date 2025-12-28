@@ -25,7 +25,10 @@ class EEGClassifierConfig(BaseModel):
 
     num_classes: int
 
-    tokenizer_method: Literal["linear"] | Literal["eegnet"] = "linear"
+    tokenizer_method: Literal["linear"] | Literal["eegnet"] | Literal["flatten"] = (
+        "linear"
+    )
+
     classifier_method: Literal["linear"] | Literal["mlp"] = "linear"
     dropout_rate: float = 0.3
 
@@ -60,6 +63,19 @@ class EEGNetTokenizer(nn.Module):
         return self.proj(x)  # (B, num_tokens, encoder_dim)
 
 
+class FlattenTokenizer(nn.Module):
+    def __init__(self, encoder_dim: int):
+        super().__init__()
+        self.proj = nn.Linear(1, encoder_dim)
+
+    def forward(self, x):
+        # x: (B, C, T)
+        B, C, T = x.shape
+        # Flatten to (B, C*T, 1)
+        x = x.reshape(B, C * T, 1)
+        return self.proj(x)  # (B, C*T, encoder_dim)
+
+
 class EEGClassifier(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
@@ -86,6 +102,8 @@ class EEGClassifier(nn.Module, PyTorchModelHubMixin):
             self.tokenizer = EEGNetTokenizer(
                 num_channels=sequence_len, encoder_dim=encoder_dim
             )
+        elif self.tokenizer_method == "flatten":
+            self.tokenizer = FlattenTokenizer(encoder_dim=encoder_dim)
         else:
             raise ValueError()
 

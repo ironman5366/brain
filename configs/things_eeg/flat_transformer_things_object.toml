@@ -1,0 +1,16 @@
+arch = "classifier"
+data_path = "/kreka/research/willy/side/brain_datasets/things/things-processed-fixed-v2-2025-12-26/things-processed-fixed-v2-2025-12-26.safetensors"
+dataset = "things_eeg_classification"
+class_col = "objectnumber"
+
+epochs = 10
+batch_size=64
+
+[classifier]
+encoder_dim=256
+heads=8
+sequence_len = 63
+max_tokens = 10000
+num_classes = 1854
+tokenizer_method = "flatten"
+classifier_method="mlp"
