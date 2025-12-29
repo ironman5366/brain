@@ -9,7 +9,7 @@ dependencies = [
     "datasets>=4.4.1",
     "einops>=0.8.1",
     "gdown>=5.2.0",
-    "huggingface-hub>=1.2.2",
+    "huggingface-hub",
     "ipykernel>=7.1.0",
     "mne>=1.11.0",
     "polars>=1.36.1",
@@ -25,7 +25,7 @@ dependencies = [
     "torch-geometric>=2.7.0",
     "torcheeg",
     "tqdm>=4.67.1",
-    "transformers>=2.3.0",
+    "transformers>=4.57",
     "wandb>=0.23.1",
 ]
 

@@ -1,0 +1,15 @@
+arch = "eegnet_embeds"
+data_path = "/kreka/research/willy/side/brain_datasets/alljoined-isolated-epochs-2025-12-25/alljoined-isolated-epochs-2025-12-25-train-siglip.safetensors"
+dataset = "embeds"
+class_col = "objectnumber"
+
+epochs = 100
+
+[eegnet]
+num_channels = 32
+num_samples = 78
+# "classes" here is siglip dim
+num_classes = 1152
+F1=64
+F2=128
+D=16

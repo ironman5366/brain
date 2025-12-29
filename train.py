@@ -12,7 +12,12 @@ from models.classifiers import (
     EEGClassifierConfig,
     EEGClassifierTrainer,
 )
-from models.eegnet import EEGNet, EEGNetConfig, EEGNetTrainer
+from models.eegnet import (
+    EEGNet,
+    EEGNetConfig,
+    EEGNetClassifierTrainer,
+    EEGNetEmbedTrainer,
+)
 from models.nice_eeg import Enc_EEG, EncEEGConfig, EncEEGTrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
@@ -36,6 +41,7 @@ class Config(BaseModel):
         | typing.Literal["sparse_classification"]
         | typing.Literal["aj_preprocessed_classification"]
         | typing.Literal["things_eeg_classification"]
+        | typing.Literal["embeds"]
     ) = "standard"
     class_col: str | None = None
 
@@ -44,6 +50,7 @@ class Config(BaseModel):
         typing.Literal["mae"]
         | typing.Literal["classifier"]
         | typing.Literal["eegnet"]
+        | typing.Literal["eegnet_embeds"]
         | typing.Literal["nice_eeg"]
     ) = "mae"
     mae: EEGMAEConfig | None = None
@@ -114,6 +121,10 @@ def train(config: Config):
         )
         dataset_kwargs["class_col"] = config.class_col
         dataset_class = ThingsEEGClassificationDataset
+    elif config.dataset == "embeds":
+        from data.dataset import EmbedDataset
+
+        dataset_class = EmbedDataset
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
@@ -134,7 +145,7 @@ def train(config: Config):
     elif config.arch == "classifier":
         assert config.classifier is not None, "need class col to train classifier"
         model = EEGClassifier.from_config(config.classifier)
-    elif config.arch == "eegnet":
+    elif config.arch == "eegnet" or config.arch == "eegnet_embeds":
         assert config.eegnet is not None, "need EEGNet config to train EEGNet"
         model = EEGNet.from_config(config.eegnet)
     elif config.arch == "nice_eeg":
@@ -173,8 +184,15 @@ def train(config: Config):
             optimizer=optimizer,
         )
     elif config.arch == "eegnet":
-        trainer = EEGNetTrainer(
+        trainer = EEGNetClassifierTrainer(
             classifier=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
+    elif config.arch == "eegnet_embeds":
+        trainer = EEGNetEmbedTrainer(
+            model=model,
             accelerator=accelerator,
             scheduler=scheduler,
             optimizer=optimizer,
@@ -206,7 +224,7 @@ def train(config: Config):
             elif config.arch == "classifier":
                 samples, classes = batch
                 l = trainer.step(samples, classes)
-            elif config.arch == "eegnet":
+            elif config.arch == "eegnet" or config.arch == "eegnet_embeds":
                 samples, classes = batch
                 l = trainer.step(samples, classes)
             elif config.arch == "nice_eeg":

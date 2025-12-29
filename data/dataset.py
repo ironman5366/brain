@@ -108,3 +108,20 @@ class ThingsEEGClassificationDataset(Dataset):
 
         # TODO: probably better to do this with autocast
         return tensor.to(torch.float32), torch.tensor(row_it, dtype=torch.long)
+
+
+class EmbedDataset(Dataset):
+    def __init__(
+        self, data_path: Path, samples_key: str = "samples", embeds_key: str = "embeds"
+    ):
+        print(f"Loading samples and embeds from {data_path}...")
+        data = load_file(data_path)
+        self.samples = data[samples_key]
+        self.embeds = data[embeds_key]
+        assert len(self.samples) == len(self.embeds)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx], self.embeds[idx]

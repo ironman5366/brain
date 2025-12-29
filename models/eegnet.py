@@ -5,6 +5,7 @@ from accelerate import Accelerator
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from huggingface_hub import PyTorchModelHubMixin
+import torch.nn.functional as F
 
 
 class EEGNetConfig(BaseModel):
@@ -104,7 +105,29 @@ class EEGNet(nn.Module, PyTorchModelHubMixin):
         return cls(**config.model_dump())
 
 
-class EEGNetTrainer:
+class EEGNetEmbedTrainer:
+    def __init__(
+        self,
+        *,
+        model: EEGNet,
+        accelerator: Accelerator,
+        scheduler: LRScheduler,
+        optimizer: Optimizer,
+    ):
+        self.model = model
+        self.accelerator = accelerator
+        self.scheduler = scheduler
+        self.optimizer = optimizer
+
+    def step(self, x, img_embeds):
+        self.optimizer.zero_grad()
+
+        output_embeds = self.model(x)
+        loss = F.mse_loss(output_embeds, img_embeds)
+        return {"loss": loss}
+
+
+class EEGNetClassifierTrainer:
     def __init__(
         self,
         *,
