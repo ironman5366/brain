@@ -26,7 +26,8 @@ dependencies = [
     "torch-geometric>=2.7.0",
     "torcheeg",
     "tqdm>=4.67.1",
-    "transformers>=2.3.0",
+    "transformers>=4.38.0",
+    "soundfile>=0.13.0",
     "wandb>=0.23.1",
 ]
 

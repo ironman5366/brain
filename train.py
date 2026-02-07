@@ -5,7 +5,7 @@ import sys
 import typing
 
 # Internal imports
-from data.dataset import MaskedEEGDataset, SparseDataset, SparseClassificationDataset
+from data.dataset import MaskedEEGDataset, SparseDataset, SparseClassificationDataset, SparseAudioEmbedDataset
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
     EEGClassifier,
@@ -14,6 +14,7 @@ from models.classifiers import (
 )
 from models.eegnet import EEGNet, EEGNetConfig, EEGNetTrainer
 from models.nice_eeg import Enc_EEG, EncEEGConfig, EncEEGTrainer
+from models.audio_embed import EEGAudioEmbed, EEGAudioEmbedConfig, EEGAudioEmbedTrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -36,8 +37,10 @@ class Config(BaseModel):
         | typing.Literal["sparse_classification"]
         | typing.Literal["aj_preprocessed_classification"]
         | typing.Literal["things_eeg_classification"]
+        | typing.Literal["sparse_audio_embed"]
     ) = "standard"
     class_col: str | None = None
+    audio_embeds_path: str | None = None
 
     # Model config
     arch: (
@@ -45,11 +48,13 @@ class Config(BaseModel):
         | typing.Literal["classifier"]
         | typing.Literal["eegnet"]
         | typing.Literal["nice_eeg"]
+        | typing.Literal["audio_embed"]
     ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
     eegnet: EEGNetConfig | None = None
     nice_eeg: EncEEGConfig | None = None
+    audio_embed: EEGAudioEmbedConfig | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -114,6 +119,12 @@ def train(config: Config):
         )
         dataset_kwargs["class_col"] = config.class_col
         dataset_class = ThingsEEGClassificationDataset
+    elif config.dataset == "sparse_audio_embed":
+        assert config.audio_embeds_path is not None, (
+            "need audio_embeds_path for sparse_audio_embed dataset"
+        )
+        dataset_class = SparseAudioEmbedDataset
+        dataset_kwargs["audio_embeds_path"] = config.audio_embeds_path
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
@@ -140,6 +151,9 @@ def train(config: Config):
     elif config.arch == "nice_eeg":
         assert config.nice_eeg is not None, "need EncEEG config to train nice_eeg"
         model = Enc_EEG.from_config(config.nice_eeg)
+    elif config.arch == "audio_embed":
+        assert config.audio_embed is not None, "need audio_embed config"
+        model = EEGAudioEmbed.from_config(config.audio_embed)
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -186,6 +200,13 @@ def train(config: Config):
             scheduler=scheduler,
             optimizer=optimizer,
         )
+    elif config.arch == "audio_embed":
+        trainer = EEGAudioEmbedTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -212,6 +233,9 @@ def train(config: Config):
             elif config.arch == "nice_eeg":
                 samples, classes = batch
                 l = trainer.step(samples, classes)
+            elif config.arch == "audio_embed":
+                samples, audio_embeds = batch
+                l = trainer.step(samples, audio_embeds)
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
@@ -222,7 +246,8 @@ def train(config: Config):
                             f"Loss: {l['loss'].item():.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                         )
                     else:
-                        print(f"Loss: {l['loss']:.3f}")
+                        loss_val = l['loss'].item() if hasattr(l['loss'], 'item') else l['loss']
+                        print(f"Loss: {loss_val:.3f}")
             i += 1
 
         checkpoint_dir = Path(config.checkpoint_dir) / config.name / f"epoch_{epoch}"

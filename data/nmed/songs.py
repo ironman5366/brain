@@ -3,8 +3,8 @@ from dataclasses import dataclass
 
 NMED_DATA_DIR = Path("/kreka/research/willy/side/brain_datasets/nmed")
 NMED_MUSIC_DIR = Path("/kreka/research/willy/side/brain_datasets/nmed_music")
-NMED_AUDIO_DIR = NMED_OUTPUT_DIR / "audio"
 NMED_OUTPUT_DIR = Path("/kreka/research/willy/side/brain_datasets/nmed-processed")
+NMED_AUDIO_DIR = NMED_OUTPUT_DIR / "audio"
 
 NMED_SFREQ = 125  # Hz, native sample rate of imputed data
 

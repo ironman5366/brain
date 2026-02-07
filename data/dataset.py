@@ -76,6 +76,21 @@ class SparseClassificationDataset(SparseMetadataDataset):
         return tensor, torch.tensor(row_it, dtype=torch.long)
 
 
+class SparseAudioEmbedDataset(SparseDataset):
+    """EEG samples paired with pre-computed audio embeddings."""
+
+    def __init__(self, samples_path: Path, audio_embeds_path: str):
+        super().__init__(samples_path)
+        print(f"Loading audio embeddings from {audio_embeds_path}...")
+        self.audio_embeds = load_file(audio_embeds_path)["audio_embeds"]
+        assert len(self.audio_embeds) == len(self.sparse_samples), (
+            f"Audio embed count {len(self.audio_embeds)} != EEG count {len(self.sparse_samples)}"
+        )
+
+    def __getitem__(self, idx):
+        return self.sparse_samples[idx], self.audio_embeds[idx]
+
+
 class ThingsEEGClassificationDataset(Dataset):
     def __init__(self, samples_path: Path, class_col: str):
         self.class_col = class_col
