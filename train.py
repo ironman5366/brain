@@ -15,6 +15,7 @@ from models.classifiers import (
 from models.eegnet import EEGNet, EEGNetConfig, EEGNetTrainer
 from models.nice_eeg import Enc_EEG, EncEEGConfig, EncEEGTrainer
 from models.audio_embed import EEGAudioEmbed, EEGAudioEmbedConfig, EEGAudioEmbedTrainer
+from models.audio_contrastive import EEGAudioContrastive, EEGAudioContrastiveConfig, EEGAudioContrastiveTrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -49,12 +50,14 @@ class Config(BaseModel):
         | typing.Literal["eegnet"]
         | typing.Literal["nice_eeg"]
         | typing.Literal["audio_embed"]
+        | typing.Literal["audio_contrastive"]
     ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
     eegnet: EEGNetConfig | None = None
     nice_eeg: EncEEGConfig | None = None
     audio_embed: EEGAudioEmbedConfig | None = None
+    audio_contrastive: EEGAudioContrastiveConfig | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -154,6 +157,9 @@ def train(config: Config):
     elif config.arch == "audio_embed":
         assert config.audio_embed is not None, "need audio_embed config"
         model = EEGAudioEmbed.from_config(config.audio_embed)
+    elif config.arch == "audio_contrastive":
+        assert config.audio_contrastive is not None, "need audio_contrastive config"
+        model = EEGAudioContrastive.from_config(config.audio_contrastive)
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -207,6 +213,15 @@ def train(config: Config):
             scheduler=scheduler,
             optimizer=optimizer,
         )
+    elif config.arch == "audio_contrastive":
+        trainer = EEGAudioContrastiveTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+            contrastive_weight=config.audio_contrastive.contrastive_weight,
+            mse_weight=config.audio_contrastive.mse_weight,
+        )
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -236,6 +251,9 @@ def train(config: Config):
             elif config.arch == "audio_embed":
                 samples, audio_embeds = batch
                 l = trainer.step(samples, audio_embeds)
+            elif config.arch == "audio_contrastive":
+                samples, audio_embeds = batch
+                l = trainer.step(samples, audio_embeds)
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
@@ -245,6 +263,9 @@ def train(config: Config):
                         print(
                             f"Loss: {l['loss'].item():.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                         )
+                    elif config.arch == "audio_contrastive":
+                        loss_val = l['loss'].item() if hasattr(l['loss'], 'item') else l['loss']
+                        print(f"Loss: {loss_val:.3f} | Top-1: {l['top1_acc'] * 100:.1f}%")
                     else:
                         loss_val = l['loss'].item() if hasattr(l['loss'], 'item') else l['loss']
                         print(f"Loss: {loss_val:.3f}")
