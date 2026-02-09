@@ -91,6 +91,51 @@ class SparseAudioEmbedDataset(SparseDataset):
         return self.sparse_samples[idx], self.audio_embeds[idx]
 
 
+class ContinuousAudioEmbedDataset(Dataset):
+    """Multi-second EEG sequences paired with audio embeddings.
+
+    EEG: (N, W, C, T) — W seconds of C channels with T samples each.
+    Audio: (N, W, 128, 75) — W seconds of EnCodec embeddings.
+    Optionally includes sequence lengths for variable-length (full-song) data.
+    """
+
+    def __init__(self, samples_path: Path, audio_embeds_path: str, lengths_path: str | None = None):
+        super().__init__()
+        print(f"Loading continuous samples from {samples_path}...")
+        samples_data = load_file(samples_path)
+        self.sparse_samples = samples_data["sparse_samples"]  # (N, W, C, T)
+
+        print(f"Loading continuous audio embeddings from {audio_embeds_path}...")
+        self.audio_embeds = load_file(audio_embeds_path)["audio_embeds"]  # (N, W, 128, 75)
+
+        assert len(self.audio_embeds) == len(self.sparse_samples), (
+            f"Audio embed count {len(self.audio_embeds)} != EEG count {len(self.sparse_samples)}"
+        )
+
+        # Variable-length support
+        self.lengths = None
+        if lengths_path:
+            lengths_p = Path(lengths_path)
+            if lengths_p.exists():
+                print(f"Loading sequence lengths from {lengths_path}...")
+                self.lengths = load_file(lengths_path)["lengths"]  # (N,)
+
+        print(f"  EEG shape: {self.sparse_samples.shape}")
+        print(f"  Audio shape: {self.audio_embeds.shape}")
+        if self.lengths is not None:
+            print(f"  Lengths: min={self.lengths.min().item()}, max={self.lengths.max().item()}")
+
+    def __len__(self):
+        return len(self.sparse_samples)
+
+    def __getitem__(self, idx):
+        eeg = self.sparse_samples[idx]      # (W, C, T)
+        audio = self.audio_embeds[idx]       # (W, 128, 75)
+        if self.lengths is not None:
+            return eeg, audio, self.lengths[idx]
+        return eeg, audio
+
+
 class ThingsEEGClassificationDataset(Dataset):
     def __init__(self, samples_path: Path, class_col: str):
         self.class_col = class_col

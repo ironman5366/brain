@@ -5,7 +5,7 @@ import sys
 import typing
 
 # Internal imports
-from data.dataset import MaskedEEGDataset, SparseDataset, SparseClassificationDataset, SparseAudioEmbedDataset
+from data.dataset import MaskedEEGDataset, SparseDataset, SparseClassificationDataset, SparseAudioEmbedDataset, ContinuousAudioEmbedDataset
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
     EEGClassifier,
@@ -16,6 +16,8 @@ from models.eegnet import EEGNet, EEGNetConfig, EEGNetTrainer
 from models.nice_eeg import Enc_EEG, EncEEGConfig, EncEEGTrainer
 from models.audio_embed import EEGAudioEmbed, EEGAudioEmbedConfig, EEGAudioEmbedTrainer
 from models.audio_contrastive import EEGAudioContrastive, EEGAudioContrastiveConfig, EEGAudioContrastiveTrainer
+from models.audio_embed_hierarchical import HierarchicalEEGAudioEmbed, HierarchicalEEGAudioEmbedConfig, HierarchicalEEGAudioEmbedTrainer
+from models.audio_contrastive_hierarchical import HierarchicalEEGAudioContrastive, HierarchicalEEGAudioContrastiveConfig, HierarchicalEEGAudioContrastiveTrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -39,9 +41,11 @@ class Config(BaseModel):
         | typing.Literal["aj_preprocessed_classification"]
         | typing.Literal["things_eeg_classification"]
         | typing.Literal["sparse_audio_embed"]
+        | typing.Literal["continuous_audio_embed"]
     ) = "standard"
     class_col: str | None = None
     audio_embeds_path: str | None = None
+    lengths_path: str | None = None
 
     # Model config
     arch: (
@@ -51,6 +55,8 @@ class Config(BaseModel):
         | typing.Literal["nice_eeg"]
         | typing.Literal["audio_embed"]
         | typing.Literal["audio_contrastive"]
+        | typing.Literal["hierarchical_audio_embed"]
+        | typing.Literal["hierarchical_audio_contrastive"]
     ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
@@ -58,6 +64,11 @@ class Config(BaseModel):
     nice_eeg: EncEEGConfig | None = None
     audio_embed: EEGAudioEmbedConfig | None = None
     audio_contrastive: EEGAudioContrastiveConfig | None = None
+    hierarchical_audio_embed: HierarchicalEEGAudioEmbedConfig | None = None
+    hierarchical_audio_contrastive: HierarchicalEEGAudioContrastiveConfig | None = None
+
+    # For initializing hierarchical models from baseline checkpoints
+    spatial_checkpoint: str | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -128,6 +139,14 @@ def train(config: Config):
         )
         dataset_class = SparseAudioEmbedDataset
         dataset_kwargs["audio_embeds_path"] = config.audio_embeds_path
+    elif config.dataset == "continuous_audio_embed":
+        assert config.audio_embeds_path is not None, (
+            "need audio_embeds_path for continuous_audio_embed dataset"
+        )
+        dataset_class = ContinuousAudioEmbedDataset
+        dataset_kwargs["audio_embeds_path"] = config.audio_embeds_path
+        if config.lengths_path:
+            dataset_kwargs["lengths_path"] = config.lengths_path
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
@@ -160,6 +179,16 @@ def train(config: Config):
     elif config.arch == "audio_contrastive":
         assert config.audio_contrastive is not None, "need audio_contrastive config"
         model = EEGAudioContrastive.from_config(config.audio_contrastive)
+    elif config.arch == "hierarchical_audio_embed":
+        assert config.hierarchical_audio_embed is not None, "need hierarchical_audio_embed config"
+        model = HierarchicalEEGAudioEmbed.from_config(config.hierarchical_audio_embed)
+        if config.spatial_checkpoint:
+            model.load_spatial_from_baseline(config.spatial_checkpoint)
+    elif config.arch == "hierarchical_audio_contrastive":
+        assert config.hierarchical_audio_contrastive is not None, "need hierarchical_audio_contrastive config"
+        model = HierarchicalEEGAudioContrastive.from_config(config.hierarchical_audio_contrastive)
+        if config.spatial_checkpoint:
+            model.load_spatial_from_baseline(config.spatial_checkpoint)
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -222,6 +251,22 @@ def train(config: Config):
             contrastive_weight=config.audio_contrastive.contrastive_weight,
             mse_weight=config.audio_contrastive.mse_weight,
         )
+    elif config.arch == "hierarchical_audio_embed":
+        trainer = HierarchicalEEGAudioEmbedTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
+    elif config.arch == "hierarchical_audio_contrastive":
+        trainer = HierarchicalEEGAudioContrastiveTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+            contrastive_weight=config.hierarchical_audio_contrastive.contrastive_weight,
+            mse_weight=config.hierarchical_audio_contrastive.mse_weight,
+        )
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -254,6 +299,13 @@ def train(config: Config):
             elif config.arch == "audio_contrastive":
                 samples, audio_embeds = batch
                 l = trainer.step(samples, audio_embeds)
+            elif config.arch in ("hierarchical_audio_embed", "hierarchical_audio_contrastive"):
+                if len(batch) == 3:
+                    samples, audio_embeds, lengths = batch
+                    l = trainer.step(samples, audio_embeds, lengths)
+                else:
+                    samples, audio_embeds = batch
+                    l = trainer.step(samples, audio_embeds)
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
@@ -263,7 +315,7 @@ def train(config: Config):
                         print(
                             f"Loss: {l['loss'].item():.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                         )
-                    elif config.arch == "audio_contrastive":
+                    elif config.arch in ("audio_contrastive", "hierarchical_audio_contrastive"):
                         loss_val = l['loss'].item() if hasattr(l['loss'], 'item') else l['loss']
                         print(f"Loss: {loss_val:.3f} | Top-1: {l['top1_acc'] * 100:.1f}%")
                     else:

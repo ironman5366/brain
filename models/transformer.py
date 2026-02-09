@@ -43,14 +43,16 @@ class Attention(Module):
             else nn.Identity()
         )
 
-    def forward(self, x):
+    def forward(self, x, attn_mask=None):
         x = self.norm(x)
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), qkv)
 
         out = F.scaled_dot_product_attention(
-            q, k, v, dropout_p=self.dropout_p if self.training else 0.0
+            q, k, v,
+            attn_mask=attn_mask,
+            dropout_p=self.dropout_p if self.training else 0.0,
         )
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
@@ -89,9 +91,9 @@ class Transformer(Module):
                 )
             )
 
-    def forward(self, x):
+    def forward(self, x, attn_mask=None):
         for attn, ff in self.layers:
-            x = attn(x) + x
+            x = attn(x, attn_mask=attn_mask) + x
             x = ff(x) + x
 
         return self.norm(x)
