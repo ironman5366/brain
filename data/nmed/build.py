@@ -28,7 +28,8 @@ from data.nmed.songs import (
     SONGS,
     SUBJECT_IDS,
 )
-from utils import standardize_epochs
+from data.songfam.channel_mapping import EGI_TO_32CH_MAP, TARGET_CHANNELS
+from utils import map_egi_to_32ch, standardize_epochs
 
 WINDOW_SECONDS = 1.0
 WINDOW_SAMPLES = int(NMED_SFREQ * WINDOW_SECONDS)  # 125
@@ -173,6 +174,69 @@ def process_songs(
     return all_samples, mask
 
 
+def process_songs_32ch(
+    ratings: np.ndarray,
+    participant_info: list[dict],
+) -> list[dict]:
+    """Process all imputed song files into 32-channel windowed samples."""
+    all_samples = []
+    participant_map = {p["id"]: p for p in participant_info}
+
+    for song in tqdm(SONGS, desc="Processing songs (32ch)"):
+        mat_path = NMED_DATA_DIR / f"song{song.file_number}_Imputed.mat"
+        mat = scipy.io.loadmat(mat_path)
+
+        data_key = f"data{song.file_number}"
+        subs_key = f"subs{song.file_number}"
+
+        eeg_data = mat[data_key]  # (125, T, 20)
+        subs = mat[subs_key]  # (1, 20) object array of subject IDs
+
+        n_channels, n_times, n_subjects = eeg_data.shape
+        n_windows = n_times // WINDOW_SAMPLES
+
+        sub_ids = [str(subs[0, i][0]) for i in range(n_subjects)]
+
+        song_idx = song.id - 1
+        familiarity = ratings[0, song_idx]
+        enjoyment = ratings[1, song_idx]
+
+        for subj_idx in range(n_subjects):
+            sub_id = sub_ids[subj_idx]
+
+            subj_eeg = eeg_data[:, :, subj_idx]  # (125, T)
+
+            usable_samples = n_windows * WINDOW_SAMPLES
+            subj_eeg_trimmed = subj_eeg[:, :usable_samples]
+            windows = subj_eeg_trimmed.reshape(
+                n_channels, n_windows, WINDOW_SAMPLES
+            )
+            windows = windows.transpose(1, 0, 2)  # (W, 125, 125)
+            windows = torch.from_numpy(windows.copy()).to(torch.float32)
+
+            # Map EGI→32ch via spatial IDW
+            mapped = map_egi_to_32ch(
+                windows, EGI_TO_32CH_MAP, TARGET_CHANNELS,
+                normalization=NORMALIZATION,
+            )  # (W, 32, 125)
+
+            for w_idx in range(mapped.shape[0]):
+                all_samples.append({
+                    "sample": mapped[w_idx],
+                    "subject_id": sub_id,
+                    "song_id": song.id,
+                    "song_name": song.title,
+                    "artist": song.artist,
+                    "tempo_bpm": song.tempo_bpm,
+                    "window_idx": w_idx,
+                    "window_start_sec": w_idx * WINDOW_SECONDS,
+                    "familiarity": int(familiarity[subj_idx]),
+                    "enjoyment": int(enjoyment[subj_idx]),
+                })
+
+    return all_samples
+
+
 def save_split(
     samples: list[dict],
     mask_indices: torch.Tensor,
@@ -194,29 +258,25 @@ def save_split(
     print(f"Saved metadata to {metadata_path}")
 
 
-def build():
-    print("=== NMED-T Dataset Builder ===")
+def save_split_dense(
+    samples: list[dict],
+    safetensors_path: Path,
+    metadata_path: Path,
+):
+    """Save dense (no mask) samples to safetensors + parquet."""
+    tensors = torch.stack([s["sample"] for s in samples])
 
-    # Step 1: Prepare audio files
-    print("\n[1/4] Preparing audio files...")
-    prepare_audio()
+    save_file({"samples": tensors}, safetensors_path)
 
-    # Step 2: Load metadata
-    print("\n[2/4] Loading metadata...")
-    ratings = load_behavioral_ratings()
-    participant_info = load_participant_info()
-    print(f"  Ratings shape: {ratings.shape}")
-    print(f"  Participants: {len(participant_info)}")
+    metadata_df = pl.from_dicts([{k: v for k, v in s.items() if k != "sample"} for s in samples])
+    metadata_df.write_parquet(metadata_path)
 
-    # Step 3: Process songs
-    print("\n[3/4] Processing songs...")
-    all_samples, mask = process_songs(ratings, participant_info)
-    mask_indices = torch.where(mask)[0]
-    print(f"  Total samples: {len(all_samples):,}")
-    print(f"  Active channels: {mask_indices.shape[0]}")
+    print(f"Saved {tensors.shape} samples to {safetensors_path}")
+    print(f"Saved metadata to {metadata_path}")
 
-    # Step 4: Split and save
-    print("\n[4/4] Splitting and saving...")
+
+def split_and_save(all_samples, save_fn, prefix):
+    """Subject-level train/val split and save."""
     unique_subjects = list(set(s["subject_id"] for s in all_samples))
     random.seed(42)
     random.shuffle(unique_subjects)
@@ -233,22 +293,61 @@ def build():
 
     NMED_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    save_split(
+    save_fn(
         train_samples,
-        mask_indices,
-        NMED_OUTPUT_DIR / "nmed-train.safetensors",
-        NMED_OUTPUT_DIR / "nmed-train-metadata.parquet",
+        NMED_OUTPUT_DIR / f"{prefix}-train.safetensors",
+        NMED_OUTPUT_DIR / f"{prefix}-train-metadata.parquet",
     )
 
-    save_split(
+    save_fn(
         val_samples,
-        mask_indices,
-        NMED_OUTPUT_DIR / "nmed-val.safetensors",
-        NMED_OUTPUT_DIR / "nmed-val-metadata.parquet",
+        NMED_OUTPUT_DIR / f"{prefix}-val.safetensors",
+        NMED_OUTPUT_DIR / f"{prefix}-val-metadata.parquet",
     )
+
+
+def build(channels: int = 120):
+    print(f"=== NMED-T Dataset Builder ({channels}ch) ===")
+
+    # Step 1: Prepare audio files
+    print("\n[1/4] Preparing audio files...")
+    prepare_audio()
+
+    # Step 2: Load metadata
+    print("\n[2/4] Loading metadata...")
+    ratings = load_behavioral_ratings()
+    participant_info = load_participant_info()
+    print(f"  Ratings shape: {ratings.shape}")
+    print(f"  Participants: {len(participant_info)}")
+
+    # Step 3: Process songs
+    print("\n[3/4] Processing songs...")
+    if channels == 32:
+        all_samples = process_songs_32ch(ratings, participant_info)
+        print(f"  Total samples: {len(all_samples):,}")
+        print(f"  Channels: 32 (IDW-mapped)")
+
+        # Step 4: Split and save
+        print("\n[4/4] Splitting and saving...")
+        split_and_save(all_samples, save_split_dense, "nmed-32ch")
+    else:
+        all_samples, mask = process_songs(ratings, participant_info)
+        mask_indices = torch.where(mask)[0]
+        print(f"  Total samples: {len(all_samples):,}")
+        print(f"  Active channels: {mask_indices.shape[0]}")
+
+        # Step 4: Split and save
+        print("\n[4/4] Splitting and saving...")
+
+        def save_fn(samples, st_path, meta_path):
+            save_split(samples, mask_indices, st_path, meta_path)
+
+        split_and_save(all_samples, save_fn, "nmed")
 
     print("\nDone!")
 
 
 if __name__ == "__main__":
-    build()
+    import sys
+    ch = 32 if "--channels" in sys.argv and "32" in sys.argv else 120
+    build(channels=ch)

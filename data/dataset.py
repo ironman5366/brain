@@ -136,6 +136,47 @@ class ContinuousAudioEmbedDataset(Dataset):
         return eeg, audio
 
 
+class DenseAudioEmbedDataset(Dataset):
+    """EEG samples (dense, no mask) paired with audio embeddings."""
+
+    def __init__(self, samples_path: Path, audio_embeds_path: str):
+        print(f"Loading samples from {samples_path}...")
+        self.samples = load_file(samples_path)["samples"]
+        print(f"Loading audio embeddings from {audio_embeds_path}...")
+        self.audio_embeds = load_file(audio_embeds_path)["audio_embeds"]
+        assert len(self.audio_embeds) == len(self.samples), (
+            f"Audio embed count {len(self.audio_embeds)} != EEG count {len(self.samples)}"
+        )
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx], self.audio_embeds[idx]
+
+
+class CombinedAudioEmbedDataset(Dataset):
+    """Concatenates multiple audio-embed datasets with identical channel layout."""
+
+    def __init__(self, *datasets):
+        self.datasets = datasets
+        self.cumulative_sizes = []
+        total = 0
+        for ds in datasets:
+            total += len(ds)
+            self.cumulative_sizes.append(total)
+
+    def __len__(self):
+        return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
+
+    def __getitem__(self, idx):
+        for ds_idx, cumsize in enumerate(self.cumulative_sizes):
+            if idx < cumsize:
+                offset = self.cumulative_sizes[ds_idx - 1] if ds_idx > 0 else 0
+                return self.datasets[ds_idx][idx - offset]
+        raise IndexError(f"Index {idx} out of range for {len(self)} samples")
+
+
 class ThingsEEGClassificationDataset(Dataset):
     def __init__(self, samples_path: Path, class_col: str):
         self.class_col = class_col

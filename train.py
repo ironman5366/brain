@@ -5,7 +5,15 @@ import sys
 import typing
 
 # Internal imports
-from data.dataset import MaskedEEGDataset, SparseDataset, SparseClassificationDataset, SparseAudioEmbedDataset, ContinuousAudioEmbedDataset
+from data.dataset import (
+    MaskedEEGDataset,
+    SparseDataset,
+    SparseClassificationDataset,
+    SparseAudioEmbedDataset,
+    ContinuousAudioEmbedDataset,
+    DenseAudioEmbedDataset,
+    CombinedAudioEmbedDataset,
+)
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
     EEGClassifier,
@@ -42,10 +50,15 @@ class Config(BaseModel):
         | typing.Literal["things_eeg_classification"]
         | typing.Literal["sparse_audio_embed"]
         | typing.Literal["continuous_audio_embed"]
+        | typing.Literal["dense_audio_embed"]
+        | typing.Literal["combined_audio_embed"]
     ) = "standard"
     class_col: str | None = None
     audio_embeds_path: str | None = None
     lengths_path: str | None = None
+    # For combined_audio_embed: additional data paths
+    data_path_2: str | None = None
+    audio_embeds_path_2: str | None = None
 
     # Model config
     arch: (
@@ -147,10 +160,34 @@ def train(config: Config):
         dataset_kwargs["audio_embeds_path"] = config.audio_embeds_path
         if config.lengths_path:
             dataset_kwargs["lengths_path"] = config.lengths_path
+    elif config.dataset == "dense_audio_embed":
+        assert config.audio_embeds_path is not None, (
+            "need audio_embeds_path for dense_audio_embed dataset"
+        )
+        dataset = DenseAudioEmbedDataset(
+            Path(config.data_path), config.audio_embeds_path
+        )
+        dataset_class = None
+    elif config.dataset == "combined_audio_embed":
+        assert config.audio_embeds_path is not None, "need audio_embeds_path"
+        assert config.data_path_2 is not None, "need data_path_2 for combined dataset"
+        assert config.audio_embeds_path_2 is not None, "need audio_embeds_path_2"
+
+        ds1 = DenseAudioEmbedDataset(
+            Path(config.data_path), config.audio_embeds_path
+        )
+        ds2 = DenseAudioEmbedDataset(
+            Path(config.data_path_2), config.audio_embeds_path_2
+        )
+        dataset = CombinedAudioEmbedDataset(ds1, ds2)
+
+        # Skip the normal dataset construction below
+        dataset_class = None
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
-    dataset = dataset_class(Path(config.data_path), **dataset_kwargs)
+    if dataset_class is not None:
+        dataset = dataset_class(Path(config.data_path), **dataset_kwargs)
     print(f"Using shuffle={config.shuffle}")
     dataloader = DataLoader(
         dataset=dataset,

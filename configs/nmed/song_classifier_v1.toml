@@ -1,0 +1,21 @@
+name = "nmed-song-classifier-v1"
+data_path = "/kreka/research/willy/side/brain_datasets/nmed-processed/nmed-train.safetensors"
+dataset = "sparse_classification"
+class_col = "song_id"
+arch = "classifier"
+
+epochs = 10
+batch_size = 256
+lr = 1e-3
+weight_decay = 0.01
+lr_warmup_steps = 50
+
+[classifier]
+encoder_dim = 256
+heads = 4
+sequence_len = 120    # channels dim (input is B,T,C after permute)
+max_tokens = 130      # 125 timepoints + CLS + margin
+num_classes = 10
+tokenizer_method = "linear"
+classifier_method = "mlp"
+dropout_rate = 0.3
