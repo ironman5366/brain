@@ -195,12 +195,16 @@ class EEGAudioContrastive(nn.Module, PyTorchModelHubMixin):
 
 def _variance_loss(embeds: torch.Tensor, target: float = 1.0) -> torch.Tensor:
     """Hinge loss on per-dimension std — keeps each dimension alive."""
+    if embeds.shape[0] < 2:
+        return torch.tensor(0.0, device=embeds.device)
     std = embeds.std(dim=0)
     return F.relu(target - std).mean()
 
 
 def _covariance_loss(embeds: torch.Tensor) -> torch.Tensor:
     """Penalizes off-diagonal correlations between dimensions."""
+    if embeds.shape[0] < 2:
+        return torch.tensor(0.0, device=embeds.device)
     embeds = embeds - embeds.mean(dim=0)
     N = embeds.shape[0]
     cov = (embeds.T @ embeds) / (N - 1)
