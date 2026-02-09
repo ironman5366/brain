@@ -132,6 +132,43 @@ class CombinedAudioEmbedDataset(Dataset):
         raise IndexError(f"Index {idx} out of range for {len(self)} samples")
 
 
+class HBNAudioEmbedDataset(Dataset):
+    """EEG samples paired with movie audio embeddings via index lookup.
+
+    Efficient for HBN where all subjects watch the same 4 movies —
+    stores only ~654 unique audio windows instead of duplicating them
+    across ~2,639 subjects (~250 KB vs ~60 GB).
+    """
+
+    def __init__(self, samples_path: Path, audio_embeds_path: str):
+        print(f"Loading samples from {samples_path}...")
+        self.samples = load_file(samples_path)["samples"]
+
+        print(f"Loading movie audio embeddings from {audio_embeds_path}...")
+        embeds_data = load_file(audio_embeds_path)
+        self.movie_embeds = dict(embeds_data)
+
+        # Load metadata for (task_name, window_idx) lookup
+        metadata_path = samples_path.parent / f"{samples_path.stem}-metadata.parquet"
+        print(f"Loading metadata from {metadata_path}...")
+        meta = pl.read_parquet(metadata_path)
+        self.task_names = meta["task_name"].to_list()
+        self.window_indices = meta["window_idx"].to_list()
+
+        assert len(self.samples) == len(self.task_names), (
+            f"Sample count {len(self.samples)} != metadata rows {len(self.task_names)}"
+        )
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        task_name = self.task_names[idx]
+        window_idx = self.window_indices[idx]
+        audio_embed = self.movie_embeds[task_name][window_idx]
+        return self.samples[idx], audio_embed
+
+
 class ThingsEEGClassificationDataset(Dataset):
     def __init__(self, samples_path: Path, class_col: str):
         self.class_col = class_col

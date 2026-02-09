@@ -12,6 +12,7 @@ from data.dataset import (
     SparseAudioEmbedDataset,
     DenseAudioEmbedDataset,
     CombinedAudioEmbedDataset,
+    HBNAudioEmbedDataset,
 )
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
@@ -54,6 +55,9 @@ class Config(BaseModel):
     # For combined_audio_embed: additional data paths
     data_path_2: str | None = None
     audio_embeds_path_2: str | None = None
+    # Optional third dataset (e.g. HBN, uses indexed audio embeds)
+    data_path_3: str | None = None
+    audio_embeds_path_3: str | None = None
 
     # Model config
     arch: (
@@ -159,7 +163,17 @@ def train(config: Config):
         ds2 = DenseAudioEmbedDataset(
             Path(config.data_path_2), config.audio_embeds_path_2
         )
-        dataset = CombinedAudioEmbedDataset(ds1, ds2)
+
+        datasets = [ds1, ds2]
+
+        if config.data_path_3 is not None:
+            assert config.audio_embeds_path_3 is not None, "need audio_embeds_path_3"
+            ds3 = HBNAudioEmbedDataset(
+                Path(config.data_path_3), config.audio_embeds_path_3
+            )
+            datasets.append(ds3)
+
+        dataset = CombinedAudioEmbedDataset(*datasets)
 
         # Skip the normal dataset construction below
         dataset_class = None
