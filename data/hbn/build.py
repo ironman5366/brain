@@ -5,8 +5,10 @@ Processes up to 2,639 subjects of 129-channel EEG recorded during movie watching
 Extracts video-watching segments, downsamples to 125 Hz, maps to 32-channel layout,
 windows into 1-second epochs, and normalizes.
 
+Uses Ray for parallel processing across subjects.
+
 Usage:
-    uv run python -m data.hbn.build [--max-subjects N] [--release R1]
+    uv run python -m data.hbn.build [--max-subjects N] [--release R1] [--num-cpus 64]
 """
 
 import argparse
@@ -15,6 +17,7 @@ from pathlib import Path
 
 import mne
 import polars as pl
+import ray
 import torch
 from safetensors.torch import save_file
 from tqdm import tqdm
@@ -35,10 +38,11 @@ WINDOW_SECONDS = 1.0
 WINDOW_SAMPLES = int(TARGET_SFREQ * WINDOW_SECONDS)  # 125
 NORMALIZATION = "epoch"
 TRAIN_SPLIT = 0.9
-EPS = 1e-8
 
 # Expected channel count for HBN EGI data
 EXPECTED_N_CHANNELS = 129
+
+mne.set_log_level(verbose="WARNING")
 
 
 def scan_subjects(
@@ -61,7 +65,7 @@ def scan_subjects(
             print(f"  Skipping {release}: no participants.tsv")
             continue
 
-        df = pl.read_csv(participants_path, separator="\t")
+        df = pl.read_csv(participants_path, separator="\t", null_values=["n/a"])
 
         for row in df.iter_rows(named=True):
             sub_id = row["participant_id"]
@@ -73,10 +77,7 @@ def scan_subjects(
 
                 # Verify .set file exists
                 set_path = (
-                    release_dir
-                    / sub_id
-                    / "eeg"
-                    / f"{sub_id}_task-{task_name}_eeg.set"
+                    release_dir / sub_id / "eeg" / f"{sub_id}_task-{task_name}_eeg.set"
                 )
                 if set_path.exists():
                     available_tasks.append(task_name)
@@ -146,7 +147,9 @@ def process_subject_task(
         return []
 
     usable = n_windows * WINDOW_SAMPLES
-    windowed = segment[:, :usable].reshape(EXPECTED_N_CHANNELS, n_windows, WINDOW_SAMPLES)
+    windowed = segment[:, :usable].reshape(
+        EXPECTED_N_CHANNELS, n_windows, WINDOW_SAMPLES
+    )
     windowed = windowed.permute(1, 0, 2)  # (W, 129, 125)
 
     # Map 129ch -> 32ch via IDW
@@ -160,14 +163,16 @@ def process_subject_task(
     movie = MOVIE_BY_TASK[task_name]
     samples = []
     for w_idx in range(n_windows):
-        samples.append({
-            "sample": mapped[w_idx],
-            "subject_id": sub_id,
-            "task_name": task_name,
-            "movie_title": movie.title,
-            "window_idx": w_idx,
-            "window_start_sec": w_idx * WINDOW_SECONDS,
-        })
+        samples.append(
+            {
+                "sample": mapped[w_idx],
+                "subject_id": sub_id,
+                "task_name": task_name,
+                "movie_title": movie.title,
+                "window_idx": w_idx,
+                "window_start_sec": w_idx * WINDOW_SECONDS,
+            }
+        )
 
     return samples
 
@@ -188,23 +193,70 @@ def process_subject(subject_info: dict) -> list[dict]:
     return samples
 
 
-def build(max_subjects: int | None = None, releases: list[str] | None = None):
+def build(
+    max_subjects: int | None = None,
+    releases: list[str] | None = None,
+    num_cpus: int = 64,
+):
     print("=== HBN Movie Watching EEG Dataset Builder ===")
 
     # Step 1: Scan for valid subjects
     print("\n[1/3] Scanning subjects...")
     subject_manifest = scan_subjects(max_subjects=max_subjects, releases=releases)
     total_tasks = sum(len(s["tasks"]) for s in subject_manifest)
-    print(f"  Found {len(subject_manifest)} subjects, {total_tasks} (subject, task) pairs")
+    print(
+        f"  Found {len(subject_manifest)} subjects, {total_tasks} (subject, task) pairs"
+    )
 
-    # Step 2: Process all subjects
-    print(f"\n[2/3] Processing subjects...")
+    # Step 2: Process all subjects in parallel with Ray
+    # Use a sliding window of in-flight tasks to avoid filling the object store.
+    print(f"\n[2/3] Processing subjects with Ray ({num_cpus} CPUs)...")
+    # ray.init(num_cpus=num_cpus)
+    ray.init(
+        "ray://raycluster-autoscaler-head-svc.default.svc.cluster.local:10001",
+        runtime_env={
+            "pip": ["polars", "mne"],
+        },
+    )
+
+    process_subject_remote = ray.remote(num_cpus=4)(process_subject)
+
+    max_in_flight = num_cpus * 2
     all_samples = []
-    for subject_info in tqdm(subject_manifest, desc="Subjects"):
-        subject_samples = process_subject(subject_info)
-        all_samples.extend(subject_samples)
+    failed = 0
+    pending = set()
+    subject_iter = iter(subject_manifest)
+    done_count = 0
+    pbar = tqdm(total=len(subject_manifest), desc="Subjects")
+
+    # Seed the initial batch
+    for subject_info in subject_manifest[:max_in_flight]:
+        pending.add(process_subject_remote.remote(subject_info))
+    submitted = min(max_in_flight, len(subject_manifest))
+
+    while pending:
+        ready, pending = ray.wait(list(pending), num_returns=1)
+        for ref in ready:
+            try:
+                subject_samples = ray.get(ref)
+                all_samples.extend(subject_samples)
+            except Exception as e:
+                failed += 1
+                print(f"  WARNING: Ray task failed: {e}")
+            done_count += 1
+            pbar.update(1)
+
+            # Submit next subject if available
+            if submitted < len(subject_manifest):
+                pending.add(process_subject_remote.remote(subject_manifest[submitted]))
+                submitted += 1
+
+    pbar.close()
+    ray.shutdown()
 
     print(f"  Total samples: {len(all_samples):,}")
+    if failed:
+        print(f"  Failed subjects: {failed}")
 
     if not all_samples:
         print("  No samples produced. Exiting.")
@@ -232,17 +284,16 @@ def build(max_subjects: int | None = None, releases: list[str] | None = None):
         if not split_samples:
             continue
 
-        tensors = torch.stack([s["sample"] for s in split_samples])
+        tensors = torch.stack([s["sample"] for s in split_samples]).contiguous()
 
         save_file(
             {"samples": tensors},
             HBN_OUTPUT_DIR / f"hbn-{split_name}.safetensors",
         )
 
-        metadata = pl.from_dicts([
-            {k: v for k, v in s.items() if k != "sample"}
-            for s in split_samples
-        ])
+        metadata = pl.from_dicts(
+            [{k: v for k, v in s.items() if k != "sample"} for s in split_samples]
+        )
         metadata.write_parquet(
             HBN_OUTPUT_DIR / f"hbn-{split_name}-metadata.parquet",
         )
@@ -254,11 +305,22 @@ def build(max_subjects: int | None = None, releases: list[str] | None = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build HBN movie watching EEG dataset")
-    parser.add_argument("--max-subjects", type=int, default=None,
-                        help="Limit number of subjects (for testing)")
-    parser.add_argument("--release", type=str, default=None,
-                        help="Process only this release (e.g. cmi_bids_R1)")
+    parser.add_argument(
+        "--max-subjects",
+        type=int,
+        default=None,
+        help="Limit number of subjects (for testing)",
+    )
+    parser.add_argument(
+        "--release",
+        type=str,
+        default=None,
+        help="Process only this release (e.g. cmi_bids_R1)",
+    )
+    parser.add_argument(
+        "--num-cpus", type=int, default=64, help="Number of CPUs for Ray (default: 64)"
+    )
     args = parser.parse_args()
 
     releases = [args.release] if args.release else None
-    build(max_subjects=args.max_subjects, releases=releases)
+    build(max_subjects=args.max_subjects, releases=releases, num_cpus=args.num_cpus)
