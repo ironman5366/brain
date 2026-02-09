@@ -56,6 +56,8 @@ class Config(BaseModel):
     audio_embeds_path_2: str | None = None
     data_path_3: str | None = None
     audio_embeds_path_3: str | None = None
+    data_path_4: str | None = None
+    audio_embeds_path_4: str | None = None
 
     # Model config
     arch: (
@@ -168,6 +170,12 @@ def train(config: Config):
                 Path(config.data_path_3), config.audio_embeds_path_3
             )
             datasets.append(ds3)
+
+        if config.data_path_4 is not None and config.audio_embeds_path_4 is not None:
+            ds4 = DenseAudioEmbedDataset(
+                Path(config.data_path_4), config.audio_embeds_path_4
+            )
+            datasets.append(ds4)
 
         dataset = CombinedAudioEmbedDataset(*datasets)
 
