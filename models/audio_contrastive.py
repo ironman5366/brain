@@ -50,6 +50,11 @@ class EEGAudioContrastiveConfig(BaseModel):
     contrastive_weight: float = 1.0
     mse_weight: float = 0.5  # 0.0 = pure contrastive
 
+    # VICReg-style regularization (prevents embedding collapse)
+    variance_weight: float = 1.0  # 0.0 = disabled
+    covariance_weight: float = 0.04  # 0.0 = disabled
+    variance_target: float = 1.0  # target std per dimension
+
 
 class EEGAudioContrastive(nn.Module, PyTorchModelHubMixin):
     def __init__(
@@ -179,9 +184,29 @@ class EEGAudioContrastive(nn.Module, PyTorchModelHubMixin):
 
         return eeg_embed, audio_embed, mse_pred
 
+    # Fields that are trainer-only (not model __init__ params)
+    _TRAINER_ONLY_FIELDS = {"variance_weight", "covariance_weight", "variance_target"}
+
     @classmethod
     def from_config(cls, config: EEGAudioContrastiveConfig):
-        return cls(**config.model_dump())
+        d = {k: v for k, v in config.model_dump().items() if k not in cls._TRAINER_ONLY_FIELDS}
+        return cls(**d)
+
+
+def _variance_loss(embeds: torch.Tensor, target: float = 1.0) -> torch.Tensor:
+    """Hinge loss on per-dimension std — keeps each dimension alive."""
+    std = embeds.std(dim=0)
+    return F.relu(target - std).mean()
+
+
+def _covariance_loss(embeds: torch.Tensor) -> torch.Tensor:
+    """Penalizes off-diagonal correlations between dimensions."""
+    embeds = embeds - embeds.mean(dim=0)
+    N = embeds.shape[0]
+    cov = (embeds.T @ embeds) / (N - 1)
+    # Zero out diagonal (we only penalize off-diagonal)
+    off_diag = cov - torch.diag(cov.diag())
+    return (off_diag**2).sum() / embeds.shape[1]
 
 
 class EEGAudioContrastiveTrainer:
@@ -194,6 +219,9 @@ class EEGAudioContrastiveTrainer:
         optimizer: Optimizer,
         contrastive_weight: float = 1.0,
         mse_weight: float = 0.5,
+        variance_weight: float = 1.0,
+        covariance_weight: float = 0.04,
+        variance_target: float = 1.0,
         max_grad_norm: float = 1.0,
     ):
         self.model = model
@@ -202,6 +230,9 @@ class EEGAudioContrastiveTrainer:
         self.optimizer = optimizer
         self.contrastive_weight = contrastive_weight
         self.mse_weight = mse_weight
+        self.variance_weight = variance_weight
+        self.covariance_weight = covariance_weight
+        self.variance_target = variance_target
         self.max_grad_norm = max_grad_norm
 
     def step(self, eeg: torch.Tensor, audio_embeds: torch.Tensor) -> dict:
@@ -230,6 +261,25 @@ class EEGAudioContrastiveTrainer:
             total_loss = total_loss + self.mse_weight * mse_loss
             mse_loss_val = mse_loss.item()
 
+        # VICReg-style regularization (prevents collapse)
+        var_loss_val = 0.0
+        cov_loss_val = 0.0
+        if self.variance_weight > 0:
+            var_loss = (
+                _variance_loss(eeg_embed, self.variance_target)
+                + _variance_loss(audio_embed, self.variance_target)
+            ) / 2
+            total_loss = total_loss + self.variance_weight * var_loss
+            var_loss_val = var_loss.item()
+
+        if self.covariance_weight > 0:
+            cov_loss = (
+                _covariance_loss(eeg_embed)
+                + _covariance_loss(audio_embed)
+            ) / 2
+            total_loss = total_loss + self.covariance_weight * cov_loss
+            cov_loss_val = cov_loss.item()
+
         self.accelerator.backward(total_loss)
 
         if self.max_grad_norm > 0:
@@ -250,6 +300,8 @@ class EEGAudioContrastiveTrainer:
                 "loss": total_loss.item(),
                 "contrastive_loss": contrastive_loss.item(),
                 "mse_loss": mse_loss_val,
+                "var_loss": var_loss_val,
+                "cov_loss": cov_loss_val,
                 "logit_scale": logit_scale.item(),
                 "top1_acc": top1_acc,
                 "lr": self.scheduler.get_last_lr()[0],
