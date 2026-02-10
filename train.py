@@ -287,6 +287,9 @@ def train(config: Config):
             optimizer=optimizer,
             contrastive_weight=config.audio_contrastive.contrastive_weight,
             mse_weight=config.audio_contrastive.mse_weight,
+            variance_weight=config.audio_contrastive.variance_weight,
+            covariance_weight=config.audio_contrastive.covariance_weight,
+            variance_target=config.audio_contrastive.variance_target,
         )
     elif config.arch == "hierarchical_audio_embed":
         trainer = HierarchicalEEGAudioEmbedTrainer(
