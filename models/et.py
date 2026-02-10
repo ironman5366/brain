@@ -201,3 +201,12 @@ class MAETrainer:
         self.accelerator.log({"loss": loss, "lr": self.scheduler.get_last_lr()[0]})
 
         return {"loss": loss}
+
+    @torch.no_grad()
+    def eval_batch(self, x) -> dict:
+        res = self.mae(x)
+        loss = res["loss"]
+        return {
+            "loss": loss.item(),
+            "batch_size": x.shape[0],
+        }

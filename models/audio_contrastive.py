@@ -313,3 +313,37 @@ class EEGAudioContrastiveTrainer:
         )
 
         return {"loss": total_loss, "top1_acc": top1_acc}
+
+    @torch.no_grad()
+    def eval_batch(self, eeg: torch.Tensor, audio_embeds: torch.Tensor) -> dict:
+        eeg_embed, audio_embed, mse_pred = self.model(eeg, audio_embeds)
+
+        logit_scale = self.model.log_logit_scale.exp().clamp(
+            max=self.model.max_logit_scale_val
+        )
+        logits_eeg = logit_scale * eeg_embed @ audio_embed.T
+        labels = torch.arange(eeg_embed.shape[0], device=eeg_embed.device)
+
+        contrastive_loss = (
+            F.cross_entropy(logits_eeg, labels)
+            + F.cross_entropy(logits_eeg.T, labels)
+        ) / 2
+
+        total_loss = self.contrastive_weight * contrastive_loss
+
+        mse_loss_val = 0.0
+        if mse_pred is not None and self.mse_weight > 0:
+            mse_loss = F.mse_loss(mse_pred, audio_embeds)
+            total_loss = total_loss + self.mse_weight * mse_loss
+            mse_loss_val = mse_loss.item()
+
+        preds = logits_eeg.argmax(dim=-1)
+        top1_acc = (preds == labels).float().mean().item()
+
+        return {
+            "loss": total_loss.item(),
+            "contrastive_loss": contrastive_loss.item(),
+            "mse_loss": mse_loss_val,
+            "top1_acc": top1_acc,
+            "batch_size": eeg.shape[0],
+        }

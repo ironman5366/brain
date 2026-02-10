@@ -1,0 +1,24 @@
+name = "audio-embed-full"
+data_path = "/kreka/research/willy/side/brain_datasets/nmed-processed/with-hbn-2016-02-10-train.safetensors"
+audio_embeds_path = "/kreka/research/willy/side/brain_datasets/nmed-processed/with-hbn-2016-02-10-train-encodec.safetensors"
+val_data_path = "/kreka/research/willy/side/brain_datasets/nmed-processed/with-hbn-2016-02-10-val.safetensors"
+val_audio_embeds_path = "/kreka/research/willy/side/brain_datasets/nmed-processed/with-hbn-2016-02-10-val-encodec.safetensors"
+dataset = "dense_audio_embed"
+arch = "audio_embed"
+
+epochs = 50
+batch_size = 1024
+lr = 3e-4
+weight_decay = 0.01
+
+[audio_embed]
+encoder_dim = 512
+encoder_mlp_dim = 2048
+heads = 8
+depth = 6
+dim_head = 64
+dropout = 0.1
+num_channels = 32
+eeg_samples = 125
+audio_embed_dim = 128
+audio_frames = 75

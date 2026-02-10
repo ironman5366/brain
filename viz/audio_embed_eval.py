@@ -22,9 +22,8 @@ from transformers import EncodecModel
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from constants import STANDARD_CHANNELS
-from data.nmed.build_encodec import ENCODEC_SFREQ, FRAMES_PER_SECOND, load_audio_24khz
-from data.nmed.songs import NMED_AUDIO_DIR, NMED_OUTPUT_DIR, SONG_BY_ID
+from data.nmed.build_encodec import ENCODEC_SFREQ, load_audio_24khz
+from data.nmed.songs import NMED_OUTPUT_DIR
 from models.audio_embed import EEGAudioEmbed
 
 st.set_page_config(page_title="Audio Embed Eval", layout="wide")
@@ -60,16 +59,32 @@ def load_eeg_model(checkpoint_path: str):
     return model
 
 
+def find_dataset_prefixes() -> list[str]:
+    """Discover dataset prefixes that have both EEG and encodec data."""
+    prefixes = set()
+    for f in DATASET_DIR.glob("*-val-encodec.safetensors"):
+        prefix = f.name.replace("-val-encodec.safetensors", "")
+        if (DATASET_DIR / f"{prefix}-val.safetensors").exists():
+            prefixes.add(prefix)
+    return sorted(prefixes)
+
+
 @st.cache_resource
-def load_split_data(split: str):
+def load_split_data(prefix: str, split: str):
     """Load EEG tensors, audio embeddings, and metadata for a split."""
-    eeg_data = load_file(str(DATASET_DIR / f"nmed-{split}.safetensors"))
-    encodec_data = load_file(str(DATASET_DIR / f"nmed-{split}-encodec.safetensors"))
-    metadata = pl.read_parquet(DATASET_DIR / f"nmed-{split}-metadata.parquet")
+    eeg_data = load_file(str(DATASET_DIR / f"{prefix}-{split}.safetensors"))
+    encodec_data = load_file(str(DATASET_DIR / f"{prefix}-{split}-encodec.safetensors"))
+    metadata = pl.read_parquet(DATASET_DIR / f"{prefix}-{split}-metadata.parquet")
+
+    # Support both sparse (old NMED) and dense (combined) formats
+    if "sparse_samples" in eeg_data:
+        eeg_tensors = eeg_data["sparse_samples"]
+    else:
+        eeg_tensors = eeg_data["samples"]
+
     return (
-        eeg_data["sparse_samples"],  # (N, 120, 125)
-        eeg_data["mask_indices"],  # channel mask indices
-        encodec_data["audio_embeds"],  # (N, 128, 75)
+        eeg_tensors,
+        encodec_data["audio_embeds"],
         metadata,
     )
 
@@ -190,22 +205,43 @@ if manual_path:
     checkpoint_path = manual_path
 
 st.sidebar.divider()
+st.sidebar.header("Dataset")
+dataset_prefixes = find_dataset_prefixes()
+dataset_prefix = st.sidebar.selectbox(
+    "Dataset",
+    dataset_prefixes,
+    index=dataset_prefixes.index("initial-2016-02-10") if "initial-2016-02-10" in dataset_prefixes else 0,
+)
 split = st.sidebar.radio("Split", ["train", "val"], index=1)
 
 # Load data
-eeg_tensors, mask_indices, target_embeds, metadata = load_split_data(split)
-channel_names = [STANDARD_CHANNELS[i] for i in mask_indices.tolist()]
+eeg_tensors, target_embeds, metadata = load_split_data(dataset_prefix, split)
+num_channels = eeg_tensors.shape[1]
+channel_names = [f"Ch{i}" for i in range(num_channels)]
 
 # Filters
 st.sidebar.subheader("Filters")
-song_names = sorted(metadata["song_name"].unique().to_list())
-selected_songs = st.sidebar.multiselect("Song", song_names, default=[])
+has_song_name = "song_name" in metadata.columns and metadata["song_name"].null_count() < len(metadata)
+has_source = "source" in metadata.columns
+
+filter_cols = []
+if has_source:
+    sources = sorted(metadata["source"].drop_nulls().unique().to_list())
+    selected_sources = st.sidebar.multiselect("Source", sources, default=[])
+    filter_cols.append(("source", selected_sources))
+
+if has_song_name:
+    song_names = sorted(metadata["song_name"].drop_nulls().unique().to_list())
+    selected_songs = st.sidebar.multiselect("Song", song_names, default=[])
+    filter_cols.append(("song_name", selected_songs))
+
 subject_ids = sorted(metadata["subject_id"].unique().to_list())
 selected_subjects = st.sidebar.multiselect("Subject", subject_ids, default=[])
 
 filtered = metadata.with_row_index("_idx")
-if selected_songs:
-    filtered = filtered.filter(pl.col("song_name").is_in(selected_songs))
+for col_name, selected_vals in filter_cols:
+    if selected_vals:
+        filtered = filtered.filter(pl.col(col_name).is_in(selected_vals))
 if selected_subjects:
     filtered = filtered.filter(pl.col("subject_id").is_in(selected_subjects))
 
@@ -259,7 +295,7 @@ with st.spinner("Loading EnCodec decoder..."):
 # Current sample
 row = filtered.row(st.session_state.sample_pos, named=True)
 idx = row["_idx"]
-eeg_sample = eeg_tensors[idx]  # (120, 125)
+eeg_sample = eeg_tensors[idx]
 target_embed = target_embeds[idx]  # (128, 75)
 
 # Model inference
@@ -269,13 +305,29 @@ with torch.no_grad():
 # ---- Sample info + metrics ----
 col_info, col_metrics = st.columns([3, 1])
 with col_info:
-    st.subheader(f"{row['song_name']}")
-    st.caption(f"by {row['artist']}")
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    mc1.metric("Subject", row["subject_id"])
-    mc2.metric("Window", f"{row['window_idx']} ({row['window_start_sec']:.0f}s)")
-    mc3.metric("Tempo", f"{row['tempo_bpm']} BPM")
-    mc4.metric("Familiarity", f"{row['familiarity']}/9")
+    song_name = row.get("song_name")
+    artist = row.get("artist")
+    source = row.get("source")
+    title = song_name or source or "Sample"
+    st.subheader(title)
+    if artist:
+        st.caption(f"by {artist}")
+    elif source:
+        st.caption(f"source: {source}")
+
+    metrics = []
+    metrics.append(("Subject", row["subject_id"]))
+    metrics.append(("Window", f"{row['window_idx']} ({row['window_start_sec']:.0f}s)"))
+    if row.get("tempo_bpm") is not None:
+        metrics.append(("Tempo", f"{row['tempo_bpm']} BPM"))
+    if row.get("familiarity") is not None:
+        metrics.append(("Familiarity", f"{row['familiarity']}/9"))
+    if source:
+        metrics.append(("Source", source))
+
+    mc_cols = st.columns(len(metrics))
+    for col, (label, value) in zip(mc_cols, metrics):
+        col.metric(label, value)
 
 with col_metrics:
     mse = F.mse_loss(pred_embed, target_embed).item()
@@ -290,7 +342,12 @@ st.subheader("Audio Comparison")
 
 target_audio = decode_embeddings(encodec_model, target_embed)
 pred_audio = decode_embeddings(encodec_model, pred_embed)
-original_bytes = get_original_audio_segment(row["song_id"], row["window_start_sec"])
+
+# Original audio only available for NMED songs (song_id 1-10)
+song_id = row.get("song_id")
+original_bytes = None
+if song_id is not None and 1 <= song_id <= 10:
+    original_bytes = get_original_audio_segment(song_id, row["window_start_sec"])
 
 ac1, ac2, ac3 = st.columns(3)
 with ac1:
@@ -378,8 +435,8 @@ def plot_spectrogram(audio, sr, ax, title):
 
 fig_spec, (ax_s1, ax_s2, ax_s3) = plt.subplots(1, 3, figsize=(18, 4))
 
-if original_bytes:
-    orig_audio = load_song_audio(row["song_id"])
+if original_bytes and song_id is not None:
+    orig_audio = load_song_audio(song_id)
     start = int(row["window_start_sec"] * ENCODEC_SFREQ)
     plot_spectrogram(orig_audio[start : start + ENCODEC_SFREQ], ENCODEC_SFREQ, ax_s1, "Original")
 else:
