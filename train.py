@@ -163,19 +163,15 @@ def train(config: Config):
         ds2 = DenseAudioEmbedDataset(
             Path(config.data_path_2), config.audio_embeds_path_2
         )
+
         datasets = [ds1, ds2]
 
-        if config.data_path_3 is not None and config.audio_embeds_path_3 is not None:
-            ds3 = DenseAudioEmbedDataset(
-                Path(config.data_path_3), config.audio_embeds_path_3
-            )
-            datasets.append(ds3)
-
-        if config.data_path_4 is not None and config.audio_embeds_path_4 is not None:
-            ds4 = DenseAudioEmbedDataset(
-                Path(config.data_path_4), config.audio_embeds_path_4
-            )
-            datasets.append(ds4)
+        for dp, ap in [
+            (config.data_path_3, config.audio_embeds_path_3),
+            (config.data_path_4, config.audio_embeds_path_4),
+        ]:
+            if dp is not None and ap is not None:
+                datasets.append(DenseAudioEmbedDataset(Path(dp), ap))
 
         dataset = CombinedAudioEmbedDataset(*datasets)
 
