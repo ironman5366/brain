@@ -21,7 +21,7 @@ from safetensors.torch import load_file, save_file
 
 DATA_DIR = Path("/kreka/research/willy/side/brain_datasets/nmed-processed")
 
-SOURCES = ["nmed-32ch", "songfam", "musicemo", "musin-g", "hbn"]
+SOURCES = ["nmed-32ch", "songfam", "musicemo", "musin-g", "eav-32ch", "hbn"]
 
 
 def combine_split(name: str, split: str):

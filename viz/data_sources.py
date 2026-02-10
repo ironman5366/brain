@@ -26,6 +26,7 @@ from safetensors.torch import load_file
 sys.path.append(str(Path(__file__).parent.parent))
 
 from constants import STANDARD_CHANNELS
+from data.eav.songs import EAV_AUDIO_DIR
 from data.musin_g.songs import MUSIN_G_AUDIO_DIR, SONGS_BY_ID as MUSING_SONGS_BY_ID
 from data.songfam.songs import SONGFAM_STIMULI_DIR
 from data.musicemo.songs import MUSICEMO_STIMULI_DIR
@@ -87,6 +88,10 @@ def _hbn_audio(row: dict) -> Path | None:
     return HBN_AUDIO_DIR / f"{row['task_name']}.wav"
 
 
+def _eav_audio(row: dict) -> Path | None:
+    return EAV_AUDIO_DIR / row["audio_filename"]
+
+
 SOURCES = [
     SourceConfig(
         name="NMED-T",
@@ -142,6 +147,17 @@ SOURCES = [
         stimulus_column="movie_title",
         display_columns=[
             "movie_title", "task_name",
+            "subject_id", "window_idx", "window_start_sec",
+        ],
+    ),
+    SourceConfig(
+        name="EAV",
+        prefix="eav",
+        is_sparse=True,
+        audio_resolver=_eav_audio,
+        stimulus_column="emotion",
+        display_columns=[
+            "emotion", "condition", "trial_idx",
             "subject_id", "window_idx", "window_start_sec",
         ],
     ),
@@ -228,7 +244,7 @@ with col_pie:
     fig, ax = plt.subplots(figsize=(5, 5))
     labels = list(counts.keys())
     sizes = list(counts.values())
-    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
     ax.pie(sizes, labels=labels, autopct="%1.1f%%", colors=colors, startangle=90)
     ax.set_title(f"Total: {total_all:,} samples")
     st.pyplot(fig)
