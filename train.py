@@ -11,7 +11,6 @@ from data.dataset import (
     SparseClassificationDataset,
     SparseAudioEmbedDataset,
     DenseAudioEmbedDataset,
-    CombinedAudioEmbedDataset,
 )
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
@@ -48,17 +47,9 @@ class Config(BaseModel):
         | typing.Literal["things_eeg_classification"]
         | typing.Literal["sparse_audio_embed"]
         | typing.Literal["dense_audio_embed"]
-        | typing.Literal["combined_audio_embed"]
     ) = "standard"
     class_col: str | None = None
     audio_embeds_path: str | None = None
-    # For combined_audio_embed: additional data paths
-    data_path_2: str | None = None
-    audio_embeds_path_2: str | None = None
-    data_path_3: str | None = None
-    audio_embeds_path_3: str | None = None
-    data_path_4: str | None = None
-    audio_embeds_path_4: str | None = None
 
     # Model config
     arch: (
@@ -154,31 +145,6 @@ def train(config: Config):
         dataset = DenseAudioEmbedDataset(
             Path(config.data_path), config.audio_embeds_path
         )
-        dataset_class = None
-    elif config.dataset == "combined_audio_embed":
-        assert config.audio_embeds_path is not None, "need audio_embeds_path"
-        assert config.data_path_2 is not None, "need data_path_2 for combined dataset"
-        assert config.audio_embeds_path_2 is not None, "need audio_embeds_path_2"
-
-        ds1 = DenseAudioEmbedDataset(
-            Path(config.data_path), config.audio_embeds_path
-        )
-        ds2 = DenseAudioEmbedDataset(
-            Path(config.data_path_2), config.audio_embeds_path_2
-        )
-
-        datasets = [ds1, ds2]
-
-        for dp, ap in [
-            (config.data_path_3, config.audio_embeds_path_3),
-            (config.data_path_4, config.audio_embeds_path_4),
-        ]:
-            if dp is not None and ap is not None:
-                datasets.append(DenseAudioEmbedDataset(Path(dp), ap))
-
-        dataset = CombinedAudioEmbedDataset(*datasets)
-
-        # Skip the normal dataset construction below
         dataset_class = None
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
