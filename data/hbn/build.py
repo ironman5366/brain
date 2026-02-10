@@ -15,11 +15,10 @@ import argparse
 import random
 from pathlib import Path
 
+import numpy as np
 import mne
 import polars as pl
 import ray
-import torch
-from safetensors.torch import save_file
 from tqdm import tqdm
 
 from data.hbn.movies import (
@@ -32,7 +31,6 @@ from data.hbn.movies import (
     TARGET_SFREQ,
 )
 from data.songfam.channel_mapping import TARGET_CHANNELS
-from utils import map_egi_to_32ch
 
 WINDOW_SECONDS = 1.0
 WINDOW_SAMPLES = int(TARGET_SFREQ * WINDOW_SECONDS)  # 125
@@ -97,6 +95,33 @@ def scan_subjects(
     return subject_list
 
 
+def _map_egi_to_32ch_numpy(
+    epoch_data: np.ndarray,
+    mapping: dict[str, list[tuple[int, float]]],
+    target_channels: list[str],
+    normalization: str = "epoch",
+    eps: float = 1e-8,
+) -> np.ndarray:
+    """Map EGI 129-channel data to 32-channel layout via IDW (numpy, no torch)."""
+    n_epochs, _, n_times = epoch_data.shape
+    n_targets = len(target_channels)
+    result = np.zeros((n_epochs, n_targets, n_times), dtype=np.float32)
+
+    for t_idx, t_name in enumerate(target_channels):
+        contributors = mapping[t_name]
+        for egi_row, weight in contributors:
+            result[:, t_idx, :] += weight * epoch_data[:, egi_row, :]
+
+    if normalization == "epoch":
+        mean = result.mean(axis=-1, keepdims=True)
+        std = result.std(axis=-1, keepdims=True)
+        result = (result - mean) / (std + eps)
+    elif normalization != "none":
+        raise ValueError(f"Unknown normalization: {normalization}")
+
+    return result
+
+
 def process_subject_task(
     sub_id: str,
     release: str,
@@ -130,7 +155,7 @@ def process_subject_task(
     if raw.info["sfreq"] != TARGET_SFREQ:
         raw.resample(TARGET_SFREQ, verbose=False)
 
-    eeg_data = torch.from_numpy(raw.get_data()).float()  # (n_ch, T)
+    eeg_data = raw.get_data().astype(np.float32)  # (n_ch, T)
 
     # Extract video segment
     start_sample = int(video_start_sec * TARGET_SFREQ)
@@ -150,10 +175,10 @@ def process_subject_task(
     windowed = segment[:, :usable].reshape(
         EXPECTED_N_CHANNELS, n_windows, WINDOW_SAMPLES
     )
-    windowed = windowed.permute(1, 0, 2)  # (W, 129, 125)
+    windowed = windowed.transpose(1, 0, 2)  # (W, 129, 125)
 
     # Map 129ch -> 32ch via IDW
-    mapped = map_egi_to_32ch(
+    mapped = _map_egi_to_32ch_numpy(
         windowed,
         EGI129_TO_32CH_MAP,
         TARGET_CHANNELS,
@@ -216,6 +241,15 @@ def build(
         "ray://raycluster-autoscaler-head-svc.default.svc.cluster.local:10001",
         runtime_env={
             "pip": ["polars", "mne"],
+            "working_dir": "/kreka/research/willy/side/brain-worktrees/hbn",
+            "excludes": [
+                ".venv",
+                ".git",
+                "__pycache__",
+                "*.safetensors",
+                "*.parquet",
+                "notebooks",
+            ],
         },
     )
 
@@ -235,7 +269,8 @@ def build(
     submitted = min(max_in_flight, len(subject_manifest))
 
     while pending:
-        ready, pending = ray.wait(list(pending), num_returns=1)
+        ready, remaining = ray.wait(list(pending), num_returns=1)
+        pending = set(remaining)
         for ref in ready:
             try:
                 subject_samples = ray.get(ref)
@@ -264,6 +299,9 @@ def build(
 
     # Step 3: Split and save
     print("\n[3/3] Splitting and saving...")
+    import torch
+    from safetensors.torch import save_file
+
     unique_subjects = list(set(s["subject_id"] for s in all_samples))
     random.seed(42)
     random.shuffle(unique_subjects)
@@ -284,7 +322,9 @@ def build(
         if not split_samples:
             continue
 
-        tensors = torch.stack([s["sample"] for s in split_samples]).contiguous()
+        tensors = torch.from_numpy(
+            np.stack([s["sample"] for s in split_samples])
+        ).contiguous()
 
         save_file(
             {"samples": tensors},
