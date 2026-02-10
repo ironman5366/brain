@@ -26,6 +26,7 @@ SOURCES = [
     "songfam",
     "musicemo",
     "musin-g",
+    "eav-32ch",
 ]
 
 
