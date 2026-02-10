@@ -110,28 +110,6 @@ class DenseAudioEmbedDataset(Dataset):
         return self.samples[idx], self.audio_embeds[idx]
 
 
-class CombinedAudioEmbedDataset(Dataset):
-    """Concatenates multiple audio-embed datasets with identical channel layout."""
-
-    def __init__(self, *datasets):
-        self.datasets = datasets
-        self.cumulative_sizes = []
-        total = 0
-        for ds in datasets:
-            total += len(ds)
-            self.cumulative_sizes.append(total)
-
-    def __len__(self):
-        return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
-
-    def __getitem__(self, idx):
-        for ds_idx, cumsize in enumerate(self.cumulative_sizes):
-            if idx < cumsize:
-                offset = self.cumulative_sizes[ds_idx - 1] if ds_idx > 0 else 0
-                return self.datasets[ds_idx][idx - offset]
-        raise IndexError(f"Index {idx} out of range for {len(self)} samples")
-
-
 class ThingsEEGClassificationDataset(Dataset):
     def __init__(self, samples_path: Path, class_col: str):
         self.class_col = class_col
