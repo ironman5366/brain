@@ -55,9 +55,12 @@ class Config(BaseModel):
     # For combined_audio_embed: additional data paths
     data_path_2: str | None = None
     audio_embeds_path_2: str | None = None
-    # Optional third dataset (e.g. HBN, uses indexed audio embeds)
     data_path_3: str | None = None
     audio_embeds_path_3: str | None = None
+    data_path_4: str | None = None
+    audio_embeds_path_4: str | None = None
+    # Slot numbers (3, 4, ...) that use HBNAudioEmbedDataset (indexed audio embeds)
+    hbn_indexed_slots: list[int] = []
 
     # Model config
     arch: (
@@ -166,12 +169,16 @@ def train(config: Config):
 
         datasets = [ds1, ds2]
 
-        if config.data_path_3 is not None:
-            assert config.audio_embeds_path_3 is not None, "need audio_embeds_path_3"
-            ds3 = HBNAudioEmbedDataset(
-                Path(config.data_path_3), config.audio_embeds_path_3
-            )
-            datasets.append(ds3)
+        for slot, (dp, ap) in enumerate(
+            [
+                (config.data_path_3, config.audio_embeds_path_3),
+                (config.data_path_4, config.audio_embeds_path_4),
+            ],
+            start=3,
+        ):
+            if dp is not None and ap is not None:
+                ds_cls = HBNAudioEmbedDataset if slot in config.hbn_indexed_slots else DenseAudioEmbedDataset
+                datasets.append(ds_cls(Path(dp), ap))
 
         dataset = CombinedAudioEmbedDataset(*datasets)
 
@@ -188,6 +195,7 @@ def train(config: Config):
         num_workers=config.num_workers,
         batch_size=config.batch_size,
         shuffle=config.shuffle,
+        drop_last=True,
     )
 
     if rank == 0:
