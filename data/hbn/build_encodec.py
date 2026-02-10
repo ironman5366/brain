@@ -1,9 +1,8 @@
 """
 Pre-compute EnCodec encoder embeddings for HBN movie audio.
 
-Since all subjects watch the same 4 movies, this only encodes 4 audio tracks
-and saves per-movie embedding tensors. The HBNAudioEmbedDataset class handles
-lookup at runtime, avoiding ~60 GB of duplicated data.
+Produces per-split audio_embeds tensors aligned 1:1 with EEG samples,
+matching the standard format used by all other datasets.
 
 Usage:
     uv run python -m data.hbn.build_encodec
@@ -11,10 +10,12 @@ Usage:
 
 from math import gcd
 
+import polars as pl
 import soundfile as sf
 import torch
 from safetensors.torch import save_file
 from scipy.signal import resample_poly
+from tqdm import tqdm
 from transformers import EncodecModel
 
 from data.hbn.movies import HBN_AUDIO_DIR, HBN_OUTPUT_DIR, MOVIES
@@ -74,7 +75,7 @@ def build():
     print("=== HBN Movie EnCodec Embedding Builder ===")
 
     # Load EnCodec model
-    print("\n[1/2] Loading EnCodec model...")
+    print("\n[1/3] Loading EnCodec model...")
     model = EncodecModel.from_pretrained("facebook/encodec_24khz")
     model.eval()
 
@@ -83,8 +84,8 @@ def build():
         print("  Using CUDA")
 
     # Encode each movie
-    print("\n[2/2] Encoding movie audio tracks...")
-    movie_embeds = {}
+    print("\n[2/3] Encoding movie audio tracks...")
+    movie_embeds: dict[str, torch.Tensor] = {}  # task_name -> (n_windows, 128, 75)
 
     for movie in MOVIES:
         audio = load_audio_24khz(movie.task_name)
@@ -93,17 +94,44 @@ def build():
             audio = audio.cuda()
 
         windows = encode_audio(model, audio)
-        movie_embeds[movie.task_name] = windows.cpu().contiguous()
+        movie_embeds[movie.task_name] = windows.cpu()
         print(f"  {movie.task_name}: {windows.shape[0]} windows ({movie.stimulus_duration:.1f}s stimulus)")
 
-    # Save per-movie embeddings in a single file
-    out_path = HBN_OUTPUT_DIR / "hbn-movie-encodec.safetensors"
-    HBN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    save_file(movie_embeds, out_path)
-    print(f"\n  Saved to {out_path}")
+    # Build per-split embedding tensors aligned with EEG metadata ordering
+    print("\n[3/3] Building aligned tensors...")
 
-    total_windows = sum(t.shape[0] for t in movie_embeds.values())
-    print(f"  Total: {total_windows} unique audio windows across 4 movies")
+    for split in ["train", "val"]:
+        meta_path = HBN_OUTPUT_DIR / f"hbn-{split}-metadata.parquet"
+        if not meta_path.exists():
+            print(f"  Skipping {split}: metadata not found at {meta_path}")
+            continue
+
+        meta = pl.read_parquet(meta_path)
+        n_samples = len(meta)
+        audio_embeds = torch.zeros(n_samples, 128, FRAMES_PER_SECOND)
+
+        skipped = 0
+        for i in range(n_samples):
+            row = meta.row(i, named=True)
+            task_name = row["task_name"]
+            window_idx = row["window_idx"]
+
+            if task_name not in movie_embeds:
+                skipped += 1
+                continue
+
+            embeds = movie_embeds[task_name]
+            if window_idx < embeds.shape[0]:
+                audio_embeds[i] = embeds[window_idx]
+            else:
+                skipped += 1
+
+        if skipped > 0:
+            print(f"  WARNING: {skipped} samples had missing audio embeddings")
+
+        out_path = HBN_OUTPUT_DIR / f"hbn-{split}-encodec.safetensors"
+        save_file({"audio_embeds": audio_embeds}, out_path)
+        print(f"  Saved {split}: {audio_embeds.shape} to {out_path}")
 
     print("\nDone!")
 

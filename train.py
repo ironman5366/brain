@@ -12,7 +12,6 @@ from data.dataset import (
     SparseAudioEmbedDataset,
     DenseAudioEmbedDataset,
     CombinedAudioEmbedDataset,
-    HBNAudioEmbedDataset,
 )
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
@@ -59,8 +58,6 @@ class Config(BaseModel):
     audio_embeds_path_3: str | None = None
     data_path_4: str | None = None
     audio_embeds_path_4: str | None = None
-    # Slot numbers (3, 4, ...) that use HBNAudioEmbedDataset (indexed audio embeds)
-    hbn_indexed_slots: list[int] = []
 
     # Model config
     arch: (
@@ -169,16 +166,12 @@ def train(config: Config):
 
         datasets = [ds1, ds2]
 
-        for slot, (dp, ap) in enumerate(
-            [
-                (config.data_path_3, config.audio_embeds_path_3),
-                (config.data_path_4, config.audio_embeds_path_4),
-            ],
-            start=3,
-        ):
+        for dp, ap in [
+            (config.data_path_3, config.audio_embeds_path_3),
+            (config.data_path_4, config.audio_embeds_path_4),
+        ]:
             if dp is not None and ap is not None:
-                ds_cls = HBNAudioEmbedDataset if slot in config.hbn_indexed_slots else DenseAudioEmbedDataset
-                datasets.append(ds_cls(Path(dp), ap))
+                datasets.append(DenseAudioEmbedDataset(Path(dp), ap))
 
         dataset = CombinedAudioEmbedDataset(*datasets)
 
