@@ -140,3 +140,18 @@ class EEGAudioEmbedTrainer:
         self.accelerator.log({"loss": loss.item(), "lr": self.scheduler.get_last_lr()[0]})
 
         return {"loss": loss}
+
+    @torch.no_grad()
+    def eval_batch(self, eeg: torch.Tensor, audio_embeds: torch.Tensor) -> dict:
+        audio_pred = self.model(eeg)
+        loss = F.mse_loss(audio_pred, audio_embeds)
+
+        pred_flat = audio_pred.reshape(audio_pred.shape[0], -1)
+        target_flat = audio_embeds.reshape(audio_embeds.shape[0], -1)
+        cosine_sim = F.cosine_similarity(pred_flat, target_flat, dim=1).mean().item()
+
+        return {
+            "loss": loss.item(),
+            "cosine_sim": cosine_sim,
+            "batch_size": eeg.shape[0],
+        }

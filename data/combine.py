@@ -21,12 +21,7 @@ from safetensors.torch import load_file, save_file
 
 DATA_DIR = Path("/kreka/research/willy/side/brain_datasets/nmed-processed")
 
-SOURCES = [
-    "nmed-32ch",
-    "songfam",
-    "musicemo",
-    "musin-g",
-]
+SOURCES = ["nmed-32ch", "songfam", "musicemo", "musin-g", "hbn"]
 
 
 def combine_split(name: str, split: str):
@@ -39,12 +34,8 @@ def combine_split(name: str, split: str):
         encodec_path = DATA_DIR / f"{source}-{split}-encodec.safetensors"
         metadata_path = DATA_DIR / f"{source}-{split}-metadata.parquet"
 
-        if not samples_path.exists():
-            print(f"  SKIP {source} ({split}): {samples_path} not found")
-            continue
-        if not encodec_path.exists():
-            print(f"  SKIP {source} ({split}): {encodec_path} not found")
-            continue
+        assert samples_path.exists()
+        assert encodec_path.exists()
 
         samples = load_file(samples_path)["samples"]
         audio_embeds = load_file(encodec_path)["audio_embeds"]
@@ -71,7 +62,9 @@ def combine_split(name: str, split: str):
     combined_samples = torch.cat(all_samples, dim=0)
     combined_audio_embeds = torch.cat(all_audio_embeds, dim=0)
 
-    print(f"  Total: {len(combined_samples):,} samples, shape {list(combined_samples.shape)}")
+    print(
+        f"  Total: {len(combined_samples):,} samples, shape {list(combined_samples.shape)}"
+    )
 
     save_file(
         {"samples": combined_samples},

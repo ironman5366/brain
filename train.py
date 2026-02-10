@@ -51,6 +51,10 @@ class Config(BaseModel):
     class_col: str | None = None
     audio_embeds_path: str | None = None
 
+    # Validation (optional)
+    val_data_path: str | None = None
+    val_audio_embeds_path: str | None = None
+
     # Model config
     arch: (
         typing.Literal["mae"]
@@ -84,6 +88,53 @@ class Config(BaseModel):
     lr: float = 1e-3
     weight_decay: float = 1e-2
     lr_warmup_steps: int = 32
+
+
+@torch.no_grad()
+def run_validation(trainer, val_dataloader, config, accelerator, epoch, rank):
+    """Run validation pass and log metrics with val/ prefix."""
+    # Set model to eval mode
+    for attr in ("model", "mae", "classifier"):
+        if hasattr(trainer, attr):
+            getattr(trainer, attr).eval()
+            break
+
+    all_metrics: dict[str, list[float]] = {}
+    total_samples = 0
+
+    for batch in tqdm(val_dataloader, desc=f"Val epoch {epoch}", disable=(rank != 0)):
+        if config.arch == "mae":
+            metrics = trainer.eval_batch(batch)
+        elif config.arch in ("classifier", "eegnet", "nice_eeg"):
+            samples, classes = batch
+            metrics = trainer.eval_batch(samples, classes)
+        elif config.arch in ("audio_embed", "audio_contrastive", "audio_enigma"):
+            samples, audio_embeds = batch
+            metrics = trainer.eval_batch(samples, audio_embeds)
+        else:
+            raise ValueError(f"bad arch {config.arch}")
+
+        batch_size = metrics.pop("batch_size")
+        total_samples += batch_size
+
+        for k, v in metrics.items():
+            if k not in all_metrics:
+                all_metrics[k] = []
+            all_metrics[k].append(v * batch_size)
+
+    val_log = {}
+    for k, vals in all_metrics.items():
+        val_log[f"val/{k}"] = sum(vals) / total_samples
+
+    accelerator.log(val_log)
+
+    # Restore train mode
+    for attr in ("model", "mae", "classifier"):
+        if hasattr(trainer, attr):
+            getattr(trainer, attr).train(True)
+            break
+
+    return val_log
 
 
 def train(config: Config):
@@ -160,6 +211,48 @@ def train(config: Config):
         drop_last=True,
     )
 
+    # Optional validation dataloader
+    val_dataloader = None
+    if config.val_data_path is not None:
+        if rank == 0:
+            print(f"Loading validation dataset from {config.val_data_path}...")
+        if config.dataset in ("sparse_audio_embed",):
+            assert config.val_audio_embeds_path is not None, (
+                "need val_audio_embeds_path for sparse_audio_embed val dataset"
+            )
+            val_dataset = SparseAudioEmbedDataset(
+                Path(config.val_data_path), config.val_audio_embeds_path
+            )
+        elif config.dataset in ("dense_audio_embed",):
+            assert config.val_audio_embeds_path is not None, (
+                "need val_audio_embeds_path for dense_audio_embed val dataset"
+            )
+            val_dataset = DenseAudioEmbedDataset(
+                Path(config.val_data_path), config.val_audio_embeds_path
+            )
+        elif config.dataset == "standard":
+            val_dataset = MaskedEEGDataset(Path(config.val_data_path))
+        elif config.dataset == "sparse":
+            val_dataset = SparseDataset(Path(config.val_data_path))
+        elif config.dataset == "sparse_classification":
+            val_dataset = SparseClassificationDataset(
+                Path(config.val_data_path), class_col=config.class_col
+            )
+        elif config.dataset == "things_eeg_classification":
+            from data.dataset import ThingsEEGClassificationDataset
+            val_dataset = ThingsEEGClassificationDataset(
+                Path(config.val_data_path), class_col=config.class_col
+            )
+        else:
+            raise ValueError(f"Validation not supported for dataset {config.dataset}")
+        val_dataloader = DataLoader(
+            dataset=val_dataset,
+            num_workers=config.num_workers,
+            batch_size=config.batch_size,
+            shuffle=False,
+            drop_last=False,
+        )
+
     if rank == 0:
         print(f"Loading {config.arch} model...")
     if config.arch == "mae":
@@ -200,9 +293,14 @@ def train(config: Config):
 
     if rank == 0:
         print("Accelerate prepare...")
-    model, optimizer, scheduler, dataloader = accelerator.prepare(
-        model, optimizer, scheduler, dataloader
-    )
+    if val_dataloader is not None:
+        model, optimizer, scheduler, dataloader, val_dataloader = accelerator.prepare(
+            model, optimizer, scheduler, dataloader, val_dataloader
+        )
+    else:
+        model, optimizer, scheduler, dataloader = accelerator.prepare(
+            model, optimizer, scheduler, dataloader
+        )
 
     if config.arch == "mae":
         trainer = MAETrainer(
@@ -316,6 +414,14 @@ def train(config: Config):
             print(f"Checkpointing to {checkpoint_dir}...")
         _model = accelerator.unwrap_model(model)
         _model.save_pretrained(checkpoint_dir)
+
+        if val_dataloader is not None:
+            val_metrics = run_validation(
+                trainer, val_dataloader, config, accelerator, epoch, rank
+            )
+            if rank == 0:
+                parts = [f"{k}: {v:.4f}" for k, v in val_metrics.items()]
+                print(f"  Validation: {' | '.join(parts)}")
 
         accelerator.wait_for_everyone()
 
