@@ -10,11 +10,11 @@ lr = 3e-4
 weight_decay = 0.01
 
 [audio_embed]
-encoder_dim = 512
-encoder_mlp_dim = 2048
-heads = 8
-depth = 6
-dim_head = 64
+encoder_dim = 1024
+encoder_mlp_dim = 4096
+heads = 16
+depth = 12
+dim_head = 128
 dropout = 0.1
 num_channels = 32
 eeg_samples = 125
