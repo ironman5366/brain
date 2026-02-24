@@ -37,6 +37,12 @@ class EEGStream:
         self.channel_names: list[str] = []
         self.timestamp_channel: int = -1
 
+        # Server-side ring buffer for analysis (band power, etc.)
+        # Stores full board data rows so any channel can be accessed.
+        self._analysis_buffer: np.ndarray | None = None
+        self._analysis_write_idx: int = 0
+        self._analysis_capacity: int = 0
+
     @property
     def is_running(self) -> bool:
         return self._running
@@ -82,6 +88,15 @@ class EEGStream:
             default_names = ["Fp1", "Fp2", "C3", "C4", "P7", "P8", "O1", "O2"]
             self.eeg_channels = self.eeg_channels[:8]
             self.channel_names = default_names[: len(self.eeg_channels)]
+
+        # Create analysis ring buffer (5 seconds of full board data)
+        analysis_secs = 5
+        self._analysis_capacity = self.sampling_rate * analysis_secs
+        num_rows = BoardShim.get_num_rows(self.board_id)
+        self._analysis_buffer = np.zeros(
+            (num_rows, self._analysis_capacity), dtype=np.float64
+        )
+        self._analysis_write_idx = 0
 
         # Create LSL outlet
         self._outlet = self._create_lsl_outlet()
@@ -180,8 +195,31 @@ class EEGStream:
             self._thread.start()
             logger.info("Stream resumed")
 
+    def get_recent_data(self, num_samples: int) -> np.ndarray:
+        """
+        Read the most recent N samples from the server-side analysis buffer.
+
+        Returns a (num_rows, num_samples) array. Does NOT remove data.
+        Safe to call from any thread while acquisition is running.
+        """
+        buf = self._analysis_buffer
+        if buf is None:
+            return np.zeros((0, 0))
+
+        n = min(num_samples, self._analysis_capacity)
+        wi = self._analysis_write_idx
+
+        # Read backward from write index
+        if wi >= n:
+            return buf[:, wi - n : wi].copy()
+        else:
+            # Wrap around
+            tail = buf[:, self._analysis_capacity - (n - wi) :]
+            head = buf[:, :wi]
+            return np.hstack([tail, head]).copy()
+
     def _acquisition_loop(self) -> None:
-        """Poll BrainFlow ring buffer and push to LSL."""
+        """Poll BrainFlow ring buffer and push to LSL + analysis buffer."""
         poll_interval = 0.004  # ~4ms, matches 250 Hz
         while self._running:
             try:
@@ -193,6 +231,23 @@ class EEGStream:
                     self._outlet.push_chunk(
                         eeg.T.tolist(), timestamps.tolist()
                     )
+
+                    # Write to analysis ring buffer
+                    n = data.shape[1]
+                    buf = self._analysis_buffer
+                    wi = self._analysis_write_idx
+                    cap = self._analysis_capacity
+
+                    if n <= cap - wi:
+                        buf[:, wi : wi + n] = data
+                        self._analysis_write_idx = wi + n
+                    else:
+                        # Wrap around
+                        first = cap - wi
+                        buf[:, wi:] = data[:, :first]
+                        rest = n - first
+                        buf[:, :rest] = data[:, first:]
+                        self._analysis_write_idx = rest
             except Exception as e:
                 logger.error("Acquisition error: %s", e)
                 self._error = str(e)

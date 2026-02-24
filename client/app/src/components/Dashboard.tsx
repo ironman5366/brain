@@ -1,4 +1,4 @@
-export type AppId = "eeg" | "impedance";
+export type AppId = "eeg" | "impedance" | "bandpower";
 
 interface AppCard {
   id: AppId;
@@ -16,6 +16,11 @@ const APPS: AppCard[] = [
     id: "impedance",
     title: "Impedance Check",
     description: "Electrode contact quality",
+  },
+  {
+    id: "bandpower",
+    title: "Band Power",
+    description: "EEG frequency band analysis",
   },
 ];
 

@@ -3,6 +3,7 @@ import { useEEGStream } from "./hooks/useEEGStream";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { EEGDisplay } from "./components/eeg/EEGDisplay";
 import { ImpedanceCheck } from "./components/impedance/ImpedanceCheck";
+import { BandPowerApp } from "./components/bandpower/BandPowerApp";
 import { Dashboard } from "./components/Dashboard";
 import type { AppId } from "./components/Dashboard";
 
@@ -80,6 +81,19 @@ function App() {
           channelNames={state.meta?.channelNames ?? []}
         />
       )}
+
+      {view === "bandpower" &&
+        (state.connected && state.meta ? (
+          <BandPowerApp />
+        ) : (
+          <Placeholder
+            text={
+              state.error
+                ? `Error: ${state.error}`
+                : "Waiting for connection..."
+            }
+          />
+        ))}
     </div>
   );
 }
