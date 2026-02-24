@@ -1,13 +1,18 @@
 import asyncio
+import json
 import logging
+import threading
 
 import msgpack
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pylsl import StreamInlet, resolve_byprop
 
 from .board import EEGStream
-from .config import ServerConfig
+from .config import BoardMode, ServerConfig
+from .cyton import CytonHeadset
+from .impedance import ImpedanceChecker, SyntheticImpedanceChecker
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +125,7 @@ class WebSocketBridge:
 def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     app = FastAPI(title="EEG Server")
     bridge = WebSocketBridge(config, eeg_stream)
+    impedance_lock = threading.Lock()
 
     app.add_middleware(
         CORSMiddleware,
@@ -147,6 +153,83 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
             "num_ws_clients": len(bridge._clients),
             "error": eeg_stream.error,
         }
+
+    @app.post("/api/impedance/start")
+    async def start_impedance_check():
+        """Run impedance check on all channels. Returns SSE stream with per-channel results."""
+        if not impedance_lock.acquire(blocking=False):
+            return StreamingResponse(
+                iter(
+                    [
+                        f"data: {json.dumps({'type': 'error', 'message': 'Impedance check already in progress'})}\n\n"
+                    ]
+                ),
+                media_type="text/event-stream",
+                status_code=409,
+            )
+
+        # Get thresholds from headset (or defaults for synthetic)
+        if eeg_stream.headset is not None:
+            thresholds = eeg_stream.headset.get_impedance_thresholds()
+        else:
+            # Synthetic mode — use Cyton defaults for display
+            thresholds = CytonHeadset().get_impedance_thresholds()
+
+        async def generate():
+            loop = asyncio.get_event_loop()
+            try:
+                yield f"data: {json.dumps({'type': 'start', 'channels': eeg_stream.channel_names, 'thresholds': thresholds})}\n\n"
+
+                if config.board_mode == BoardMode.SYNTHETIC:
+                    checker = SyntheticImpedanceChecker(len(eeg_stream.eeg_channels))
+                else:
+                    # Pause normal EEG acquisition
+                    await loop.run_in_executor(None, eeg_stream.pause_stream)
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Stream paused'})}\n\n"
+
+                    # Restart board stream for impedance measurement
+                    await loop.run_in_executor(
+                        None, eeg_stream.board.start_stream
+                    )
+
+                    checker = ImpedanceChecker(
+                        eeg_stream.board,
+                        eeg_stream.board_id,
+                        eeg_stream.eeg_channels,
+                        eeg_stream.headset,
+                    )
+
+                # Measure each channel
+                results: dict[str, float] = {}
+                for ch_idx in range(len(eeg_stream.eeg_channels)):
+                    z = await loop.run_in_executor(
+                        None, checker._measure_channel, ch_idx
+                    )
+                    name = eeg_stream.channel_names[ch_idx]
+                    results[name] = z
+                    yield f"data: {json.dumps({'type': 'channel', 'index': ch_idx, 'name': name, 'impedance': z})}\n\n"
+
+                yield f"data: {json.dumps({'type': 'done', 'results': results})}\n\n"
+
+            except Exception as e:
+                logger.error("Impedance check error: %s", e)
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            finally:
+                # Resume normal EEG if we're on a real board
+                if config.board_mode != BoardMode.SYNTHETIC:
+                    try:
+                        await loop.run_in_executor(
+                            None, eeg_stream.board.stop_stream
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        await loop.run_in_executor(None, eeg_stream.resume_stream)
+                    except Exception as e:
+                        logger.error("Failed to resume stream: %s", e)
+                impedance_lock.release()
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.websocket("/ws/eeg")
     async def websocket_eeg(websocket: WebSocket):

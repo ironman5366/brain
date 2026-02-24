@@ -7,11 +7,9 @@ from brainflow.board_shim import BoardIds, BoardShim, BrainFlowInputParams
 from pylsl import StreamInfo, StreamOutlet
 
 from .config import BoardMode, ServerConfig
+from .headset import Headset
 
 logger = logging.getLogger(__name__)
-
-# Default 10-20 positions for Cyton 8-channel with Ultracortex
-DEFAULT_CHANNEL_NAMES = ["Fp1", "Fp2", "C3", "C4", "P7", "P8", "O1", "O2"]
 
 
 class EEGStream:
@@ -22,13 +20,15 @@ class EEGStream:
     Any LSL-compatible tool can consume the stream.
     """
 
-    def __init__(self, config: ServerConfig):
+    def __init__(self, config: ServerConfig, headset: Headset | None = None):
         self.config = config
+        self.headset = headset
         self._board: BoardShim | None = None
         self._outlet: StreamOutlet | None = None
         self._thread: threading.Thread | None = None
         self._running = False
         self._error: str | None = None
+        self._lock = threading.Lock()
 
         # Resolved at prepare() time
         self.board_id: int = -1
@@ -45,20 +45,26 @@ class EEGStream:
     def error(self) -> str | None:
         return self._error
 
+    @property
+    def board(self) -> BoardShim | None:
+        """Expose board for impedance checker."""
+        return self._board
+
     def prepare(self) -> None:
         """Initialize BrainFlow board and LSL outlet. Does not start streaming."""
-        params = BrainFlowInputParams()
-
         if self.config.board_mode == BoardMode.CYTON:
-            self.board_id = BoardIds.CYTON_BOARD.value
+            if self.headset is None:
+                raise ValueError("Headset required for Cyton mode")
+            self.board_id = self.headset.board_id
+            params = self.headset.get_board_params(self.config.serial_port)
             if not self.config.serial_port:
                 raise ValueError(
                     "serial_port is required for Cyton mode. "
                     "On macOS, look for /dev/cu.usbserial-*"
                 )
-            params.serial_port = self.config.serial_port
         else:
             self.board_id = BoardIds.SYNTHETIC_BOARD.value
+            params = BrainFlowInputParams()
 
         self._board = BoardShim(self.board_id, params)
         self._board.prepare_session()
@@ -68,13 +74,14 @@ class EEGStream:
         self.eeg_channels = BoardShim.get_eeg_channels(self.board_id)
         self.timestamp_channel = BoardShim.get_timestamp_channel(self.board_id)
 
-        # For Cyton, use the standard 8 channel names.
-        # For synthetic board, it may have more EEG channels — take first 8.
-        if self.config.board_mode == BoardMode.CYTON:
-            self.channel_names = DEFAULT_CHANNEL_NAMES[: len(self.eeg_channels)]
+        # Use headset channel names if available, otherwise default
+        if self.headset is not None:
+            self.channel_names = self.headset.channel_names[: len(self.eeg_channels)]
         else:
+            # Synthetic board — trim to 8 channels
+            default_names = ["Fp1", "Fp2", "C3", "C4", "P7", "P8", "O1", "O2"]
             self.eeg_channels = self.eeg_channels[:8]
-            self.channel_names = DEFAULT_CHANNEL_NAMES[: len(self.eeg_channels)]
+            self.channel_names = default_names[: len(self.eeg_channels)]
 
         # Create LSL outlet
         self._outlet = self._create_lsl_outlet()
@@ -147,6 +154,31 @@ class EEGStream:
 
         self._outlet = None
         logger.info("Acquisition stopped")
+
+    def pause_stream(self) -> None:
+        """Stop the acquisition loop and board stream, but keep the session open."""
+        with self._lock:
+            self._running = False
+            if self._thread is not None:
+                self._thread.join(timeout=2.0)
+                self._thread = None
+            if self._board is not None:
+                self._board.stop_stream()
+            logger.info("Stream paused (session still open)")
+
+    def resume_stream(self) -> None:
+        """Restart the board stream and acquisition loop."""
+        with self._lock:
+            if self._board is None:
+                raise RuntimeError("No board session to resume")
+            self._board.start_stream()
+            self._running = True
+            self._error = None
+            self._thread = threading.Thread(
+                target=self._acquisition_loop, name="eeg-acquisition", daemon=True
+            )
+            self._thread.start()
+            logger.info("Stream resumed")
 
     def _acquisition_loop(self) -> None:
         """Poll BrainFlow ring buffer and push to LSL."""

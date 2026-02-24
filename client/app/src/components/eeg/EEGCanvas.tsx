@@ -6,7 +6,7 @@ import {
   setBackgroundColor,
 } from "webgl-plot";
 import type { LineConfig } from "webgl-plot";
-import type { RingBuffer } from "../hooks/useEEGStream";
+import type { RingBuffer } from "../../hooks/useEEGStream";
 
 interface Props {
   bufferRef: React.RefObject<RingBuffer | null>;

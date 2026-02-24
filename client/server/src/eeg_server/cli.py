@@ -7,6 +7,7 @@ import uvicorn
 
 from .board import EEGStream
 from .config import BoardMode, ServerConfig, find_serial_port
+from .cyton import CytonHeadset
 from .web import create_app
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,11 @@ def main(mode: str, serial_port: str, port: int, host: str) -> None:
         port=port,
     )
 
+    # Select headset (only Cyton for now; synthetic mode uses no headset)
+    headset = CytonHeadset() if config.board_mode == BoardMode.CYTON else None
+
     # Start board acquisition + LSL stream
-    eeg_stream = EEGStream(config)
+    eeg_stream = EEGStream(config, headset=headset)
 
     def shutdown(signum, frame):
         logger.info("Shutting down...")

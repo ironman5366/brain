@@ -1,10 +1,17 @@
+import { useState } from "react";
 import { useEEGStream } from "./hooks/useEEGStream";
 import { ConnectionStatus } from "./components/ConnectionStatus";
-import { EEGDisplay } from "./components/EEGDisplay";
+import { EEGDisplay } from "./components/eeg/EEGDisplay";
+import { ImpedanceCheck } from "./components/impedance/ImpedanceCheck";
+import { Dashboard } from "./components/Dashboard";
+import type { AppId } from "./components/Dashboard";
 
 const WS_URL = "ws://localhost:8765/ws/eeg";
 
+type View = "dashboard" | AppId;
+
 function App() {
+  const [view, setView] = useState<View>("dashboard");
   const { state, bufferRef } = useEEGStream(WS_URL);
 
   return (
@@ -17,30 +24,79 @@ function App() {
         color: "#eee",
       }}
     >
-      <ConnectionStatus state={state} />
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "1rem",
+          borderBottom: "1px solid #333",
+        }}
+      >
+        {view !== "dashboard" && (
+          <button
+            onClick={() => setView("dashboard")}
+            style={{
+              padding: "0.75rem 1rem",
+              background: "none",
+              border: "none",
+              color: "#888",
+              fontFamily: "monospace",
+              fontSize: "0.85rem",
+              cursor: "pointer",
+              borderRight: "1px solid #333",
+            }}
+          >
+            &larr; Back
+          </button>
+        )}
+        <ConnectionStatus state={state} />
+      </div>
 
-      {state.connected && state.meta ? (
-        <EEGDisplay
-          bufferRef={bufferRef}
-          channelNames={state.meta.channelNames}
-          samplingRate={state.meta.samplingRate}
-        />
-      ) : (
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontFamily: "monospace",
-            color: "#666",
-          }}
-        >
-          {state.error
-            ? `Error: ${state.error}`
-            : "Waiting for connection..."}
-        </div>
+      {/* Content */}
+      {view === "dashboard" && (
+        <Dashboard onSelectApp={(id) => setView(id)} />
       )}
+
+      {view === "eeg" &&
+        (state.connected && state.meta ? (
+          <EEGDisplay
+            bufferRef={bufferRef}
+            channelNames={state.meta.channelNames}
+            samplingRate={state.meta.samplingRate}
+          />
+        ) : (
+          <Placeholder
+            text={
+              state.error
+                ? `Error: ${state.error}`
+                : "Waiting for connection..."
+            }
+          />
+        ))}
+
+      {view === "impedance" && (
+        <ImpedanceCheck
+          channelNames={state.meta?.channelNames ?? []}
+        />
+      )}
+    </div>
+  );
+}
+
+function Placeholder({ text }: { text: string }) {
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "monospace",
+        color: "#666",
+      }}
+    >
+      {text}
     </div>
   );
 }

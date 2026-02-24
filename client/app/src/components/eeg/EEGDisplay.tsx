@@ -1,4 +1,4 @@
-import type { RingBuffer } from "../hooks/useEEGStream";
+import type { RingBuffer } from "../../hooks/useEEGStream";
 import { EEGCanvas } from "./EEGCanvas";
 
 interface Props {
