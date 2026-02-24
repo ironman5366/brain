@@ -79,30 +79,29 @@ class ImpedanceChecker:
         channel_data = data[eeg_row, :].astype(np.float64)
 
         # Bandpass filter around the lead-off frequency
+        # BrainFlow perform_bandpass takes (low_cutoff, high_cutoff), NOT (center, bandwidth)
         freq = self.headset.lead_off_freq_hz
+        half_bw = 2.0  # ±2 Hz around lead-off frequency
         DataFilter.perform_bandpass(
             channel_data,
             self.sampling_rate,
-            freq,       # center frequency
-            4.0,        # bandwidth Hz
-            2,          # filter order
+            freq - half_bw,  # low cutoff
+            freq + half_bw,  # high cutoff
+            2,               # filter order
             FilterTypes.BUTTERWORTH.value,
-            0.0,        # ripple (unused for Butterworth)
+            0.0,             # ripple (unused for Butterworth)
         )
 
         # Compute RMS voltage (BrainFlow returns microvolts for Cyton)
         v_rms_uv = np.sqrt(np.mean(channel_data**2))
         v_rms_v = v_rms_uv * 1e-6
 
-        # Z = V_peak / I_peak = (V_rms * sqrt(2)) / (I_rms * sqrt(2))
-        # Since I_rms = I_peak / sqrt(2) and I_peak = lead_off_current_a:
-        # Z = V_rms / I_rms = V_rms * sqrt(2) / lead_off_current_a ... wait
-        # Actually for sinusoidal: V_rms = V_peak/sqrt(2), I_peak = lead_off_current_a
-        # So Z = V_peak / I_peak = V_rms * sqrt(2) / lead_off_current_a
+        # Z = V_peak / I_peak = V_rms * sqrt(2) / I_peak
+        # I_peak = lead_off_current_a (6 nA for ADS1299)
         current_a = self.headset.lead_off_current_a
         impedance = (v_rms_v * np.sqrt(2)) / current_a
 
-        # Subtract series resistance
+        # Subtract series resistance on the board
         impedance -= self.headset.series_resistance_ohm
 
         return max(0.0, float(impedance))

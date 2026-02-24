@@ -13,3 +13,9 @@ Anything headset-specific (board IDs, channel names, impedance thresholds, elect
 
 ### App modularity
 The React client uses a dashboard pattern. Each research tool (visualizer, impedance check, etc.) is a self-contained "app" with its own components subfolder under `app/src/components/`. Shared hooks and utilities live in `hooks/` and `lib/`.
+
+### Server-first logic and debugging
+Claude can't see the UI. So:
+- **Business logic lives in Python**, not in the frontend. The React client should be a thin display layer over server APIs.
+- **APIs should be usable by both the frontend and scripts/tools.** If the frontend calls it, a `curl` or Python script should be able to call it too.
+- **Write test scripts for debugging.** When something breaks, reproduce it with a script in `server/scripts/` that Claude can run and iterate on directly, rather than relying on UI error messages. The EEG device is physically connected — scripts can read from it.
