@@ -1,4 +1,4 @@
-import { StreamState } from "../hooks/useEEGStream";
+import type { StreamState } from "../hooks/useEEGStream";
 
 interface Props {
   state: StreamState;

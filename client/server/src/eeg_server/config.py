@@ -1,7 +1,25 @@
+import glob
+import logging
 from enum import Enum
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
+
+
+def find_serial_port() -> str:
+    """Auto-detect an OpenBCI USB serial device on macOS."""
+    matches = glob.glob("/dev/cu.usbserial-*")
+    if len(matches) == 1:
+        logger.info("Auto-detected serial port: %s", matches[0])
+        return matches[0]
+    if len(matches) > 1:
+        logger.warning(
+            "Multiple USB serial devices found: %s — pass --serial-port explicitly",
+            matches,
+        )
+    return ""
 
 
 class BoardMode(str, Enum):

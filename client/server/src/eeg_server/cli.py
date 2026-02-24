@@ -6,7 +6,7 @@ import click
 import uvicorn
 
 from .board import EEGStream
-from .config import BoardMode, ServerConfig
+from .config import BoardMode, ServerConfig, find_serial_port
 from .web import create_app
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--serial-port",
     default="",
-    help="Serial port for Cyton board (e.g. /dev/cu.usbserial-DM0258EH)",
+    help="Serial port for Cyton board. Auto-detected if omitted.",
 )
 @click.option("--port", default=8765, type=int, help="Server port")
 @click.option("--host", default="0.0.0.0", help="Server host")
@@ -33,6 +33,16 @@ def main(mode: str, serial_port: str, port: int, host: str) -> None:
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    # Auto-detect serial port for cyton mode if not specified
+    if mode == "cyton" and not serial_port:
+        serial_port = find_serial_port()
+        if not serial_port:
+            logger.error(
+                "No USB serial device found. Plug in the Cyton dongle "
+                "or pass --serial-port explicitly."
+            )
+            sys.exit(1)
 
     config = ServerConfig(
         board_mode=BoardMode(mode),

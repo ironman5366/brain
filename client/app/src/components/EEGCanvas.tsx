@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import {
   UnifiedLinePlot,
   createWebGL2Context,
-  setupCanvas,
   clearCanvas,
   setBackgroundColor,
 } from "webgl-plot";
@@ -29,10 +28,16 @@ const CHANNEL_COLORS: [number, number, number, number][] = [
 // How many seconds of data to show on screen
 const DISPLAY_SECONDS = 4;
 
+function sizeCanvas(canvas: HTMLCanvasElement) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+}
+
 export function EEGCanvas({ bufferRef, channelNames, samplingRate }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const plotRef = useRef<UnifiedLinePlot | null>(null);
-  const glRef = useRef<WebGL2RenderingContext | null>(null);
   const animRef = useRef<number>(0);
 
   const numChannels = channelNames.length;
@@ -42,13 +47,19 @@ export function EEGCanvas({ bufferRef, channelNames, samplingRate }: Props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    setupCanvas(canvas);
-    const gl = createWebGL2Context(canvas);
-    glRef.current = gl;
+    // Size the canvas backing store to match its CSS layout size
+    sizeCanvas(canvas);
+
+    let gl: WebGL2RenderingContext;
+    try {
+      gl = createWebGL2Context(canvas);
+    } catch (e) {
+      console.error("Failed to create WebGL2 context:", e);
+      return;
+    }
     setBackgroundColor(gl, [0.08, 0.08, 0.10, 1]);
 
     const plot = new UnifiedLinePlot(gl, numChannels);
-    plotRef.current = plot;
 
     // Create line configs — each channel gets a horizontal band
     const bandHeight = 2.0 / numChannels; // NDC goes from -1 to 1
@@ -76,6 +87,13 @@ export function EEGCanvas({ bufferRef, channelNames, samplingRate }: Props) {
 
     plot.initLines(configs);
 
+    // Handle resize
+    const observer = new ResizeObserver(() => {
+      sizeCanvas(canvas);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    });
+    observer.observe(canvas);
+
     // Animation loop
     const yBuffer = new Float32Array(displaySamples);
 
@@ -86,7 +104,6 @@ export function EEGCanvas({ bufferRef, channelNames, samplingRate }: Props) {
           const channelData = buf.channels[ch];
 
           // Read from ring buffer: oldest visible data to newest
-          // writeIndex points to the next write position (= oldest unwritten)
           const startIdx =
             buf.totalWritten >= displaySamples
               ? (buf.writeIndex - displaySamples + buf.capacity) % buf.capacity
@@ -131,12 +148,13 @@ export function EEGCanvas({ bufferRef, channelNames, samplingRate }: Props) {
 
     return () => {
       cancelAnimationFrame(animRef.current);
+      observer.disconnect();
       plot.cleanup();
     };
   }, [numChannels, samplingRate, displaySamples, bufferRef]);
 
   return (
-    <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+    <div ref={containerRef} style={{ position: "relative", flex: 1, minHeight: 0 }}>
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", display: "block" }}
