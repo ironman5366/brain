@@ -1,9 +1,11 @@
 import { useExperiment } from "../../hooks/useExperiment";
 import type { Protocol } from "../../lib/experiment.types";
 import { ALPHA_PROTOCOL } from "../../lib/protocols/alpha";
+import { SSVEP_PROTOCOL } from "../../lib/protocols/ssvep";
 import { StimulusRenderer } from "./StimulusRenderer";
+import { SSVEPRenderer } from "./SSVEPRenderer";
 
-const PROTOCOLS: Protocol[] = [ALPHA_PROTOCOL];
+const PROTOCOLS: Protocol[] = [ALPHA_PROTOCOL, SSVEP_PROTOCOL];
 
 export function ExperimentApp() {
   const experiment = useExperiment();
@@ -36,6 +38,23 @@ export function ExperimentApp() {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         <StimulusRenderer stimulus={phase.stimulus} />
+        <TrialFooter
+          remainingMs={phase.remainingMs}
+          progress={experiment.progress}
+          onAbort={() => experiment.abort()}
+        />
+      </div>
+    );
+  }
+
+  // SSVEP trial — flickering stimulus
+  if (phase.type === "ssvepTrial") {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <SSVEPRenderer
+          frequencies={phase.frequencies}
+          targetFrequencyHz={phase.targetFrequencyHz}
+        />
         <TrialFooter
           remainingMs={phase.remainingMs}
           progress={experiment.progress}
@@ -207,10 +226,12 @@ function ProtocolPicker({
 
       {protocols.map((p) => {
         const totalSec = p.blocks.reduce((sum, b) => {
-          const trialMs =
-            b.trialGenerator.type === "fixed"
-              ? b.trialGenerator.trials.reduce((s, t) => s + t.durationMs, 0)
-              : 0;
+          let trialMs = 0;
+          if (b.trialGenerator.type === "fixed") {
+            trialMs = b.trialGenerator.trials.reduce((s, t) => s + t.durationMs, 0);
+          } else if (b.trialGenerator.type === "ssvep") {
+            trialMs = b.trialGenerator.durationMs;
+          }
           return sum + trialMs / 1000 + b.restAfterMs / 1000;
         }, 0);
 

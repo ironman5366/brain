@@ -160,6 +160,7 @@ export type ExperimentPhase =
   | { type: "idle" }
   | { type: "blockInstruction"; blockIndex: number; instruction: string }
   | { type: "trial"; blockIndex: number; trialIndex: number; stimulus: StimulusDef; remainingMs: number }
+  | { type: "ssvepTrial"; blockIndex: number; frequencies: SSVEPFrequency[]; targetFrequencyHz?: number; remainingMs: number }
   | { type: "blockRest"; blockIndex: number; remainingMs: number }
   | { type: "complete"; sessionId: string }
   | { type: "error"; message: string };

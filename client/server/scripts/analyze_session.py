@@ -181,6 +181,195 @@ def print_analysis(results, ch_names):
             print(f"  {band_name:6s}  open={mo:.3f}  closed={mc:.3f}  ratio={ratio:.2f}x")
 
 
+## ── SSVEP-specific analysis ─────────────────────────────────
+
+
+def extract_ssvep_info(meta):
+    """Extract SSVEP stimulation parameters from markers."""
+    ssvep_blocks = {}
+    for m in meta["markers"]:
+        if m["code"] == "ssvep_start" and m.get("metadata"):
+            ssvep_blocks[m["block_id"]] = {
+                "frequencies": m["metadata"]["frequencies"],
+                "target_frequency": m["metadata"].get("target_frequency"),
+                "duration_ms": m["metadata"].get("duration_ms"),
+            }
+    return ssvep_blocks
+
+
+def compute_ssvep_snr(freqs, psd_row, target_hz, noise_bw=2.0):
+    """
+    SNR at a target frequency for a single channel's PSD.
+
+    SNR = power at target bin / mean power in surrounding noise band.
+    noise_bw: Hz on each side of target used as noise estimate,
+    excluding target ± 1 bin.
+    """
+    freq_res = freqs[1] - freqs[0]
+    target_idx = np.argmin(np.abs(freqs - target_hz))
+    target_power = psd_row[target_idx]
+
+    noise_mask = (
+        (freqs >= target_hz - noise_bw)
+        & (freqs <= target_hz + noise_bw)
+        & (np.abs(freqs - target_hz) > freq_res * 1.5)
+    )
+    noise_power = np.mean(psd_row[noise_mask]) if noise_mask.any() else 1e-12
+
+    snr = target_power / noise_power if noise_power > 0 else 0
+    snr_db = 10 * np.log10(snr) if snr > 0 else float("-inf")
+    return snr, snr_db, target_power, noise_power
+
+
+def print_ssvep_analysis(results, ssvep_info, ch_names):
+    """Print SSVEP analysis to stdout."""
+    # Group blocks by type
+    baseline_ids = [bid for bid in results if "baseline" in bid]
+    for target_hz in sorted({info["target_frequency"] for info in ssvep_info.values() if info["target_frequency"]}):
+        stim_ids = [bid for bid, info in ssvep_info.items() if info["target_frequency"] == target_hz and bid in results]
+
+        print("=" * 60)
+        print(f"SSVEP {target_hz} Hz ANALYSIS")
+        print("=" * 60)
+
+        for ch_idx, ch_name in enumerate(ch_names):
+            # Average SNR across stimulation blocks
+            snrs = []
+            for bid in stim_ids:
+                r = results[bid]
+                snr, snr_db, _, _ = compute_ssvep_snr(r["freqs"], r["psd"][ch_idx], target_hz)
+                snrs.append(snr_db)
+
+            # Average SNR during baselines (should be low)
+            base_snrs = []
+            for bid in baseline_ids:
+                if bid in results:
+                    r = results[bid]
+                    _, snr_db, _, _ = compute_ssvep_snr(r["freqs"], r["psd"][ch_idx], target_hz)
+                    base_snrs.append(snr_db)
+
+            stim_snr = np.mean(snrs) if snrs else 0
+            base_snr = np.mean(base_snrs) if base_snrs else 0
+            marker = "***" if stim_snr > 6 else "  *" if stim_snr > 3 else "   "
+            print(f"  {ch_name:4s}  stim={stim_snr:+.1f} dB  baseline={base_snr:+.1f} dB  {marker}")
+
+        # Check harmonics
+        print(f"\n  Harmonics (O1/O2 avg):")
+        if "O1" in ch_names and "O2" in ch_names:
+            o1, o2 = ch_names.index("O1"), ch_names.index("O2")
+            for harmonic in [1, 2, 3]:
+                freq_check = target_hz * harmonic
+                if freq_check > 50:
+                    break
+                snrs = []
+                for bid in stim_ids:
+                    r = results[bid]
+                    for ci in [o1, o2]:
+                        _, snr_db, _, _ = compute_ssvep_snr(r["freqs"], r["psd"][ci], freq_check)
+                        snrs.append(snr_db)
+                avg_snr = np.mean(snrs) if snrs else 0
+                label = f"{harmonic}f = {freq_check} Hz"
+                print(f"    {label:15s}  SNR={avg_snr:+.1f} dB")
+        print()
+
+
+def generate_ssvep_report(meta, eeg, blocks, results, ssvep_info, sr, ch_names) -> str:
+    """Generate a markdown report for an SSVEP session."""
+    lines = []
+    started = datetime.fromtimestamp(meta["started_at"])
+
+    lines.append(f"# {meta['protocol_id']} — Analysis Report")
+    lines.append("")
+    lines.append(f"**Session:** `{meta['session_id']}`  ")
+    lines.append(f"**Date:** {started.strftime('%Y-%m-%d %H:%M')}  ")
+    lines.append(f"**Duration:** {meta['duration_sec']:.1f}s  ")
+    lines.append(f"**Samples:** {eeg.shape[1]:,} ({eeg.shape[0]} channels @ {sr} Hz)")
+    lines.append("")
+
+    # Blocks summary
+    lines.append("## Blocks")
+    lines.append("")
+    lines.append("| Block | Type | Samples | Duration |")
+    lines.append("|-------|------|---------|----------|")
+    for b in blocks:
+        bid = b["block_id"]
+        btype = "SSVEP" if bid in ssvep_info else "Baseline"
+        freq_str = ""
+        if bid in ssvep_info:
+            freq_str = f" ({ssvep_info[bid]['target_frequency']} Hz)"
+        lines.append(f"| {bid} | {btype}{freq_str} | {b['n_samples']:,} | {b['n_samples']/sr:.1f}s |")
+    lines.append("")
+
+    # SNR analysis per frequency
+    baseline_ids = [bid for bid in results if "baseline" in bid]
+    target_freqs = sorted({info["target_frequency"] for info in ssvep_info.values() if info["target_frequency"]})
+
+    for target_hz in target_freqs:
+        stim_ids = [bid for bid, info in ssvep_info.items() if info["target_frequency"] == target_hz and bid in results]
+
+        lines.append(f"## SSVEP at {target_hz} Hz")
+        lines.append("")
+        lines.append("SNR = power at target frequency / mean power in surrounding ±2 Hz noise band.")
+        lines.append("")
+        lines.append("| Channel | Stim SNR (dB) | Baseline SNR (dB) | Detection |")
+        lines.append("|---------|---------------|-------------------|-----------|")
+
+        for ch_idx, ch_name in enumerate(ch_names):
+            snrs_stim = []
+            for bid in stim_ids:
+                r = results[bid]
+                _, snr_db, _, _ = compute_ssvep_snr(r["freqs"], r["psd"][ch_idx], target_hz)
+                snrs_stim.append(snr_db)
+
+            snrs_base = []
+            for bid in baseline_ids:
+                if bid in results:
+                    r = results[bid]
+                    _, snr_db, _, _ = compute_ssvep_snr(r["freqs"], r["psd"][ch_idx], target_hz)
+                    snrs_base.append(snr_db)
+
+            stim = np.mean(snrs_stim) if snrs_stim else 0
+            base = np.mean(snrs_base) if snrs_base else 0
+            det = "Strong" if stim > 6 else "Weak" if stim > 3 else "None"
+            lines.append(f"| {ch_name} | {stim:+.1f} | {base:+.1f} | {det} |")
+
+        lines.append("")
+
+    # Harmonic analysis (occipital focus)
+    if "O1" in ch_names and "O2" in ch_names:
+        o1, o2 = ch_names.index("O1"), ch_names.index("O2")
+
+        lines.append("## Harmonic Analysis (O1/O2)")
+        lines.append("")
+        lines.append("SSVEP typically produces peaks at the fundamental frequency and its harmonics (2f, 3f).")
+        lines.append("")
+        lines.append("| Frequency | Harmonic | SNR (dB) |")
+        lines.append("|-----------|----------|----------|")
+
+        for target_hz in target_freqs:
+            stim_ids = [bid for bid, info in ssvep_info.items() if info["target_frequency"] == target_hz and bid in results]
+            for harmonic in [1, 2, 3]:
+                freq_check = target_hz * harmonic
+                if freq_check > 50:
+                    break
+                snrs = []
+                for bid in stim_ids:
+                    r = results[bid]
+                    for ci in [o1, o2]:
+                        _, snr_db, _, _ = compute_ssvep_snr(r["freqs"], r["psd"][ci], freq_check)
+                        snrs.append(snr_db)
+                avg_snr = np.mean(snrs) if snrs else 0
+                label = f"{harmonic}f" if harmonic > 1 else "f"
+                lines.append(f"| {target_hz} Hz | {label} = {freq_check} Hz | {avg_snr:+.1f} |")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+## ── Alpha-specific report ───────────────────────────────────
+
+
 def generate_report(meta, eeg, blocks, results, sr, ch_names) -> str:
     """Generate a markdown report from analysis results."""
     lines = []
@@ -303,14 +492,24 @@ def main():
 
     results = compute_block_bandpower(eeg, blocks, sr, ch_names)
 
+    protocol = meta["protocol_id"]
+    is_ssvep = protocol.startswith("ssvep")
+    ssvep_info = extract_ssvep_info(meta) if is_ssvep else {}
+
     if args.report:
-        report = generate_report(meta, eeg, blocks, results, sr, ch_names)
+        if is_ssvep:
+            report = generate_ssvep_report(meta, eeg, blocks, results, ssvep_info, sr, ch_names)
+        else:
+            report = generate_report(meta, eeg, blocks, results, sr, ch_names)
         session_dir = SESSIONS_DIR / meta["session_id"]
         report_path = session_dir / "report.md"
         report_path.write_text(report)
         print(f"Report written to {report_path}")
     else:
-        print_analysis(results, ch_names)
+        if is_ssvep:
+            print_ssvep_analysis(results, ssvep_info, ch_names)
+        else:
+            print_analysis(results, ch_names)
 
 
 if __name__ == "__main__":

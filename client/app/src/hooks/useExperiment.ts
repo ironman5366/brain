@@ -4,6 +4,8 @@ import type {
   ExperimentPhase,
   StimulusDef,
   TrialDef,
+  SSVEPGenerator,
+  SSVEPFrequency,
 } from "../lib/experiment.types";
 import { MarkerSender } from "../lib/markers";
 
@@ -95,16 +97,6 @@ export function useExperiment() {
 
           if (abortRef.current) break;
 
-          // Generate trials from the generator config
-          const trials = generateTrials(block.trialGenerator);
-
-          setProgress({
-            block: blockIdx,
-            totalBlocks: protocol.blocks.length,
-            trial: 0,
-            totalTrials: trials.length,
-          });
-
           // Send block_start marker
           markers.send({
             code: "block_start",
@@ -112,26 +104,64 @@ export function useExperiment() {
             block_id: block.id,
           });
 
-          // Run each trial
-          for (let trialIdx = 0; trialIdx < trials.length; trialIdx++) {
-            if (abortRef.current) break;
+          if (block.trialGenerator.type === "ssvep") {
+            // SSVEP: single continuous stimulation block
+            const gen = block.trialGenerator;
 
-            const trial = trials[trialIdx];
-
-            setProgress((prev) =>
-              prev ? { ...prev, trial: trialIdx } : null
-            );
-
-            // Send trial marker
-            markers.send({
-              code: trial.markerCode,
-              timestamp: performance.now(),
-              block_id: block.id,
-              trial_index: trialIdx,
+            setProgress({
+              block: blockIdx,
+              totalBlocks: protocol.blocks.length,
+              trial: 0,
+              totalTrials: 1,
             });
 
-            // Show stimulus and countdown
-            await runTrial(trial, blockIdx, setPhase);
+            markers.send({
+              code: "ssvep_start",
+              timestamp: performance.now(),
+              block_id: block.id,
+              metadata: {
+                frequencies: gen.frequencies.map((f) => f.hz),
+                target_frequency: gen.targetFrequencyHz,
+                duration_ms: gen.durationMs,
+              },
+            });
+
+            await runSSVEPTrial(gen, blockIdx, setPhase);
+
+            markers.send({
+              code: "ssvep_end",
+              timestamp: performance.now(),
+              block_id: block.id,
+            });
+          } else {
+            // Standard trial-based blocks
+            const trials = generateTrials(block.trialGenerator);
+
+            setProgress({
+              block: blockIdx,
+              totalBlocks: protocol.blocks.length,
+              trial: 0,
+              totalTrials: trials.length,
+            });
+
+            for (let trialIdx = 0; trialIdx < trials.length; trialIdx++) {
+              if (abortRef.current) break;
+
+              const trial = trials[trialIdx];
+
+              setProgress((prev) =>
+                prev ? { ...prev, trial: trialIdx } : null
+              );
+
+              markers.send({
+                code: trial.markerCode,
+                timestamp: performance.now(),
+                block_id: block.id,
+                trial_index: trialIdx,
+              });
+
+              await runTrial(trial, blockIdx, setPhase);
+            }
           }
 
           // Send block_end marker
@@ -279,6 +309,38 @@ function runTrial(
         blockIndex,
         trialIndex: 0,
         stimulus: trial.stimulus,
+        remainingMs: remaining,
+      });
+
+      if (remaining > 0) {
+        requestAnimationFrame(update);
+      } else {
+        resolve();
+      }
+    };
+
+    update();
+  });
+}
+
+function runSSVEPTrial(
+  generator: SSVEPGenerator,
+  blockIndex: number,
+  setPhase: React.Dispatch<React.SetStateAction<ExperimentPhase>>
+): Promise<void> {
+  return new Promise((resolve) => {
+    const startTime = performance.now();
+    const totalMs = generator.durationMs;
+
+    const update = () => {
+      const elapsed = performance.now() - startTime;
+      const remaining = Math.max(0, totalMs - elapsed);
+
+      setPhase({
+        type: "ssvepTrial",
+        blockIndex,
+        frequencies: generator.frequencies,
+        targetFrequencyHz: generator.targetFrequencyHz,
         remainingMs: remaining,
       });
 
