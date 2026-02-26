@@ -1,4 +1,4 @@
-export type AppId = "eeg" | "impedance" | "bandpower" | "fft";
+export type AppId = "eeg" | "impedance" | "bandpower" | "fft" | "experiment";
 
 interface AppCard {
   id: AppId;
@@ -27,6 +27,11 @@ const APPS: AppCard[] = [
     title: "FFT Spectrum",
     description: "Frequency spectrum analysis",
   },
+  {
+    id: "experiment",
+    title: "Experiments",
+    description: "Run EEG recording protocols",
+  },
 ];
 
 interface Props {
@@ -47,8 +52,8 @@ export function Dashboard({ onSelectApp }: Props) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, 200px)",
-          gap: "1.5rem",
+          gridTemplateColumns: "repeat(3, 180px)",
+          gap: "1rem",
           justifyContent: "center",
         }}
       >
@@ -61,7 +66,7 @@ export function Dashboard({ onSelectApp }: Props) {
               flexDirection: "column",
               alignItems: "center",
               gap: "0.75rem",
-              padding: "2rem 1.5rem",
+              padding: "1.25rem 1rem",
               backgroundColor: "#1a1a2e",
               border: "1px solid #333",
               borderRadius: 12,

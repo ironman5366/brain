@@ -2,11 +2,13 @@ import asyncio
 import json
 import logging
 import threading
+from pathlib import Path
 
 import msgpack
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from pylsl import StreamInlet, resolve_byprop
 
 from .bandpower import compute_band_powers
@@ -15,6 +17,7 @@ from .board import EEGStream
 from .config import BoardMode, ServerConfig
 from .cyton import CytonHeadset
 from .impedance import ImpedanceChecker, SyntheticImpedanceChecker
+from .session import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +127,37 @@ class WebSocketBridge:
                 await asyncio.sleep(0.1)
 
 
+class StartSessionRequest(BaseModel):
+    protocol_id: str
+    protocol_version: str = "1.0.0"
+
+
+class MarkerBatch(BaseModel):
+    session_id: str
+    markers: list[dict]
+
+
+class ResponseRequest(BaseModel):
+    session_id: str
+    block_id: str
+    trial_index: int
+    response_key: str
+    reaction_time_ms: float
+    timestamp: float
+    correct: bool | None = None
+
+
+class StopSessionRequest(BaseModel):
+    session_id: str
+
+
 def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     app = FastAPI(title="EEG Server")
     bridge = WebSocketBridge(config, eeg_stream)
     impedance_lock = threading.Lock()
+
+    sessions_dir = Path(__file__).resolve().parent.parent.parent.parent / "sessions"
+    session_mgr = SessionManager(sessions_dir, eeg_stream)
 
     app.add_middleware(
         CORSMiddleware,
@@ -283,5 +313,67 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
             pass
         finally:
             bridge.remove_client(websocket)
+
+    # --- Session / Experiment Endpoints ---
+
+    @app.post("/api/session/start")
+    async def start_session(req: StartSessionRequest):
+        """Start a recording session. Returns session_id and server timestamp."""
+        if not eeg_stream.is_running:
+            raise HTTPException(400, "Board not streaming")
+        try:
+            session = session_mgr.start_session(req.protocol_id, req.protocol_version)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        return {
+            "session_id": session.session_id,
+            "started_at": session.started_at,
+        }
+
+    @app.post("/api/session/marker")
+    async def add_markers(req: MarkerBatch):
+        """Add a batch of event markers to the active session."""
+        active = session_mgr.active_session
+        if active is None or active.session_id != req.session_id:
+            raise HTTPException(404, "No active session with that ID")
+        active.add_markers(req.markers)
+        return {"ok": True, "count": len(req.markers)}
+
+    @app.post("/api/session/response")
+    async def add_response(req: ResponseRequest):
+        """Add a user response to the active session."""
+        active = session_mgr.active_session
+        if active is None or active.session_id != req.session_id:
+            raise HTTPException(404, "No active session with that ID")
+        active.add_response(req.model_dump())
+        return {"ok": True}
+
+    @app.post("/api/session/stop")
+    async def stop_session(req: StopSessionRequest):
+        """Stop the active session, save to disk, return summary."""
+        active = session_mgr.active_session
+        if active is None or active.session_id != req.session_id:
+            raise HTTPException(404, "No active session with that ID")
+        loop = asyncio.get_event_loop()
+        session = await loop.run_in_executor(None, session_mgr.stop_session)
+        return {
+            "session_id": session.session_id,
+            "duration_sec": round(session.markers[-1].server_timestamp - session.started_at, 1) if session.markers else 0,
+            "total_markers": len(session.markers),
+            "total_responses": len(session.responses),
+        }
+
+    @app.get("/api/sessions")
+    async def list_sessions():
+        """List all saved experiment sessions."""
+        return session_mgr.list_sessions()
+
+    @app.get("/api/sessions/{session_id}")
+    async def get_session(session_id: str):
+        """Get full session metadata."""
+        try:
+            return session_mgr.get_session(session_id)
+        except FileNotFoundError:
+            raise HTTPException(404, f"Session not found: {session_id}")
 
     return app

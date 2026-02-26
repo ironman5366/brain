@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 from brainflow.board_shim import BoardIds, BoardShim, BrainFlowInputParams
@@ -36,6 +37,9 @@ class EEGStream:
         self.eeg_channels: list[int] = []
         self.channel_names: list[str] = []
         self.timestamp_channel: int = -1
+
+        # Recording callback — called with each data chunk during recording
+        self._recording_callback: Callable[[np.ndarray], None] | None = None
 
         # Server-side ring buffer for analysis (band power, etc.)
         # Stores full board data rows so any channel can be accessed.
@@ -195,6 +199,14 @@ class EEGStream:
             self._thread.start()
             logger.info("Stream resumed")
 
+    def start_recording(self, callback: Callable[[np.ndarray], None]) -> None:
+        """Register a callback that receives every data chunk during acquisition."""
+        self._recording_callback = callback
+
+    def stop_recording(self) -> None:
+        """Remove the recording callback."""
+        self._recording_callback = None
+
     def get_recent_data(self, num_samples: int) -> np.ndarray:
         """
         Read the most recent N samples from the server-side analysis buffer.
@@ -231,6 +243,13 @@ class EEGStream:
                     self._outlet.push_chunk(
                         eeg.T.tolist(), timestamps.tolist()
                     )
+
+                    # Forward to recording callback if active
+                    if self._recording_callback is not None:
+                        try:
+                            self._recording_callback(data)
+                        except Exception as e:
+                            logger.warning("Recording callback error: %s", e)
 
                     # Write to analysis ring buffer
                     n = data.shape[1]
