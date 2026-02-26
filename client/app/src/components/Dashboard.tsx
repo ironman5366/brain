@@ -1,4 +1,4 @@
-export type AppId = "eeg" | "impedance" | "bandpower";
+export type AppId = "eeg" | "impedance" | "bandpower" | "fft";
 
 interface AppCard {
   id: AppId;
@@ -21,6 +21,11 @@ const APPS: AppCard[] = [
     id: "bandpower",
     title: "Band Power",
     description: "EEG frequency band analysis",
+  },
+  {
+    id: "fft",
+    title: "FFT Spectrum",
+    description: "Frequency spectrum analysis",
   },
 ];
 

@@ -4,6 +4,7 @@ import { ConnectionStatus } from "./components/ConnectionStatus";
 import { EEGDisplay } from "./components/eeg/EEGDisplay";
 import { ImpedanceCheck } from "./components/impedance/ImpedanceCheck";
 import { BandPowerApp } from "./components/bandpower/BandPowerApp";
+import { FFTApp } from "./components/fft/FFTApp";
 import { Dashboard } from "./components/Dashboard";
 import type { AppId } from "./components/Dashboard";
 
@@ -85,6 +86,19 @@ function App() {
       {view === "bandpower" &&
         (state.connected && state.meta ? (
           <BandPowerApp />
+        ) : (
+          <Placeholder
+            text={
+              state.error
+                ? `Error: ${state.error}`
+                : "Waiting for connection..."
+            }
+          />
+        ))}
+
+      {view === "fft" &&
+        (state.connected && state.meta ? (
+          <FFTApp />
         ) : (
           <Placeholder
             text={

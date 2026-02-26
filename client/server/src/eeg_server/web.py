@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pylsl import StreamInlet, resolve_byprop
 
 from .bandpower import compute_band_powers
+from .spectrum import compute_spectrum
 from .board import EEGStream
 from .config import BoardMode, ServerConfig
 from .cyton import CytonHeadset
@@ -170,6 +171,26 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
                 eeg_stream.get_recent_data(num_samples),
                 eeg_stream.eeg_channels,
                 eeg_stream.sampling_rate,
+            ),
+        )
+        return result
+
+    @app.get("/api/spectrum")
+    async def get_spectrum(window_sec: float = 2.0, nfft: int = 512):
+        """Compute frequency spectrum (PSD) using Welch's method."""
+        if not eeg_stream.is_running:
+            return {"error": "Board not streaming"}
+
+        num_samples = max(int(eeg_stream.sampling_rate * window_sec), nfft)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: compute_spectrum(
+                eeg_stream.get_recent_data(num_samples),
+                eeg_stream.eeg_channels,
+                eeg_stream.sampling_rate,
+                nfft,
             ),
         )
         return result

@@ -1,6 +1,7 @@
 import logging
 import signal
 import sys
+from pathlib import Path
 
 import click
 import uvicorn
@@ -13,22 +14,8 @@ from .web import create_app
 logger = logging.getLogger(__name__)
 
 
-@click.command()
-@click.option(
-    "--mode",
-    type=click.Choice(["cyton", "synthetic"]),
-    default="synthetic",
-    help="Board mode: 'cyton' for real hardware, 'synthetic' for simulated data",
-)
-@click.option(
-    "--serial-port",
-    default="",
-    help="Serial port for Cyton board. Auto-detected if omitted.",
-)
-@click.option("--port", default=8765, type=int, help="Server port")
-@click.option("--host", default="0.0.0.0", help="Server host")
-def main(mode: str, serial_port: str, port: int, host: str) -> None:
-    """Start the EEG streaming server."""
+def _run_server(mode: str, serial_port: str, port: int, host: str) -> None:
+    """Core server startup — extracted so watchfiles can restart it."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -79,3 +66,34 @@ def main(mode: str, serial_port: str, port: int, host: str) -> None:
         uvicorn.run(app, host=host, port=port, log_level="info")
     finally:
         eeg_stream.stop()
+
+
+@click.command()
+@click.option(
+    "--mode",
+    type=click.Choice(["cyton", "synthetic"]),
+    default="synthetic",
+    help="Board mode: 'cyton' for real hardware, 'synthetic' for simulated data",
+)
+@click.option(
+    "--serial-port",
+    default="",
+    help="Serial port for Cyton board. Auto-detected if omitted.",
+)
+@click.option("--port", default=8765, type=int, help="Server port")
+@click.option("--host", default="0.0.0.0", help="Server host")
+@click.option("--reload", is_flag=True, default=False, help="Auto-restart on code changes")
+def main(mode: str, serial_port: str, port: int, host: str, reload: bool) -> None:
+    """Start the EEG streaming server."""
+    if reload:
+        from watchfiles import run_process
+
+        src_dir = str(Path(__file__).resolve().parent)
+        logger.info("Watching %s for changes...", src_dir)
+        run_process(
+            src_dir,
+            target=_run_server,
+            args=(mode, serial_port, port, host),
+        )
+    else:
+        _run_server(mode, serial_port, port, host)
