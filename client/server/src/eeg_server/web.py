@@ -376,4 +376,21 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(404, f"Session not found: {session_id}")
 
+    @app.get("/api/sessions/{session_id}/report")
+    async def get_report(session_id: str):
+        """Get a session's markdown report."""
+        content = session_mgr.get_report(session_id)
+        if content is None:
+            raise HTTPException(404, "No report for this session")
+        return {"content": content}
+
+    @app.put("/api/sessions/{session_id}/report")
+    async def save_report(session_id: str, body: dict):
+        """Save a markdown report for a session."""
+        try:
+            session_mgr.save_report(session_id, body["content"])
+        except FileNotFoundError:
+            raise HTTPException(404, f"Session not found: {session_id}")
+        return {"ok": True}
+
     return app
