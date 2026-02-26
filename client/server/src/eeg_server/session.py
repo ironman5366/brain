@@ -244,6 +244,7 @@ class SessionManager:
                         "duration_sec": meta["duration_sec"],
                         "total_markers": meta["total_markers"],
                         "started_at": meta["started_at"],
+                        "has_report": (session_dir / "report.md").exists(),
                     }
                 )
         return sessions
@@ -255,3 +256,17 @@ class SessionManager:
             raise FileNotFoundError(f"Session not found: {session_id}")
         with open(meta_path) as f:
             return json.load(f)
+
+    def get_report(self, session_id: str) -> str | None:
+        """Load a session's markdown report, or None if it doesn't exist."""
+        report_path = self.sessions_dir / session_id / "report.md"
+        if not report_path.exists():
+            return None
+        return report_path.read_text()
+
+    def save_report(self, session_id: str, content: str) -> None:
+        """Write a markdown report for a session."""
+        session_dir = self.sessions_dir / session_id
+        if not (session_dir / "session.json").exists():
+            raise FileNotFoundError(f"Session not found: {session_id}")
+        (session_dir / "report.md").write_text(content)

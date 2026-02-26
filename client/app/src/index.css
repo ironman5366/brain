@@ -15,3 +15,23 @@ html, body, #root {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
+
+/* Markdown report styles */
+.report-markdown {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #ddd;
+  line-height: 1.6;
+  font-size: 0.9rem;
+}
+.report-markdown h1 { font-size: 1.4rem; color: #eee; margin-bottom: 0.5rem; font-family: monospace; }
+.report-markdown h2 { font-size: 1.1rem; color: #ccc; margin: 1.5rem 0 0.5rem; font-family: monospace; border-bottom: 1px solid #333; padding-bottom: 0.3rem; }
+.report-markdown h3 { font-size: 0.95rem; color: #aaa; margin: 1rem 0 0.4rem; font-family: monospace; }
+.report-markdown p { margin: 0.5rem 0; }
+.report-markdown strong { color: #eee; }
+.report-markdown code { background: #1a1a2e; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.85em; font-family: monospace; }
+.report-markdown table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; font-family: monospace; font-size: 0.8rem; }
+.report-markdown th { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 2px solid #444; color: #999; font-weight: 600; }
+.report-markdown td { padding: 0.3rem 0.75rem; border-bottom: 1px solid #222; }
+.report-markdown tr:hover td { background: #1a1a2e; }
+.report-markdown ul, .report-markdown ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+.report-markdown li { margin: 0.2rem 0; }
