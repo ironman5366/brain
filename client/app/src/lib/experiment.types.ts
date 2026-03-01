@@ -42,6 +42,8 @@ export interface AudioStimulus {
   type: "audio";
   frequency?: number;
   src?: string;
+  /** Synthesize a random novel sound each trial (for novelty oddball) */
+  novel?: boolean;
   durationMs: number;
 }
 
@@ -78,6 +80,8 @@ export interface OddballGenerator {
   type: "oddball";
   totalTrials: number;
   targetRatio: number;
+  /** Fraction of trials that are distractors/novels (default 0) */
+  distractorRatio?: number;
   stimuli: {
     standard: StimulusDef;
     target: StimulusDef;

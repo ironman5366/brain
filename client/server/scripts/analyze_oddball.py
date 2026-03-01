@@ -1,9 +1,11 @@
 """
-Analyze an auditory oddball P300 session.
+Analyze an auditory oddball session (two- or three-stimulus).
 
-Extracts epochs around each oddball_target and oddball_standard marker,
-performs bandpass filtering, baseline correction, artifact rejection,
-and computes ERPs for P300 (250-500ms) and MMN (150-250ms) components.
+Extracts epochs around each oddball marker, performs bandpass filtering,
+baseline correction, artifact rejection, and computes ERPs for:
+  - P3b: target vs standard (250-500ms, parietal)
+  - P3a: novel vs standard (250-500ms, frontal) — if novel stimuli present
+  - MMN: target vs standard (150-250ms, frontocentral)
 
 Usage:
     cd server/
@@ -27,11 +29,13 @@ SESSIONS_DIR = Path(__file__).resolve().parent.parent.parent / "sessions"
 # ERP parameters
 PRE_STIMULUS_MS = 100
 POST_STIMULUS_MS = 600
-ARTIFACT_THRESHOLD_UV = 150  # relaxed vs P300 (dry electrodes)
+ARTIFACT_THRESHOLD_UV = 150  # relaxed for dry electrodes
 BANDPASS_LOW = 0.5
 BANDPASS_HIGH = 30.0
 P300_WINDOW = (250, 500)  # ms post-stimulus
 MMN_WINDOW = (150, 250)  # ms post-stimulus
+
+ODDBALL_CODES = ("oddball_target", "oddball_standard", "oddball_novel")
 
 
 def load_session(session_id: str | None = None):
@@ -65,19 +69,19 @@ def bandpass_filter(eeg, sr, low=BANDPASS_LOW, high=BANDPASS_HIGH, order=4):
 
 
 def extract_oddball_epochs(meta, eeg, timestamps, sr):
-    """Extract epochs around each oddball marker."""
+    """Extract epochs around each oddball marker, grouped by condition."""
     pre_samples = int(PRE_STIMULUS_MS * sr / 1000)
     post_samples = int(POST_STIMULUS_MS * sr / 1000)
     t0 = timestamps[0]
     n_samples = eeg.shape[1]
+    epoch_len = pre_samples + post_samples
 
-    target_epochs = []
-    standard_epochs = []
+    epochs: dict[str, list] = {"target": [], "standard": [], "novel": []}
     rejected = 0
     total = 0
 
     for m in meta["markers"]:
-        if m["code"] not in ("oddball_target", "oddball_standard"):
+        if m["code"] not in ODDBALL_CODES:
             continue
 
         total += 1
@@ -100,27 +104,25 @@ def extract_oddball_epochs(meta, eeg, timestamps, sr):
             rejected += 1
             continue
 
-        if m["code"] == "oddball_target":
-            target_epochs.append(epoch)
-        else:
-            standard_epochs.append(epoch)
+        condition = m["code"].replace("oddball_", "")
+        epochs[condition].append(epoch)
 
-    epoch_len = pre_samples + post_samples
-    target_arr = np.array(target_epochs) if target_epochs else np.empty((0, eeg.shape[0], epoch_len))
-    standard_arr = np.array(standard_epochs) if standard_epochs else np.empty((0, eeg.shape[0], epoch_len))
+    result = {}
+    for cond, ep_list in epochs.items():
+        result[cond] = np.array(ep_list) if ep_list else np.empty((0, eeg.shape[0], epoch_len))
 
-    return target_arr, standard_arr, rejected, total
+    return result, rejected, total
 
 
-def compute_erp_metrics(target_epochs, standard_epochs, sr, ch_names, window):
-    """Compute ERP peak amplitude, latency, and significance per channel in the given window."""
+def compute_erp_metrics(condition_epochs, baseline_epochs, sr, ch_names, window):
+    """Compute ERP peak amplitude, latency, and significance per channel."""
     pre_samples = int(PRE_STIMULUS_MS * sr / 1000)
     win_start_samp = int(window[0] * sr / 1000)
     win_end_samp = int(window[1] * sr / 1000)
 
-    target_erp = target_epochs.mean(axis=0)
-    standard_erp = standard_epochs.mean(axis=0)
-    diff_erp = target_erp - standard_erp
+    cond_erp = condition_epochs.mean(axis=0)
+    base_erp = baseline_epochs.mean(axis=0)
+    diff_erp = cond_erp - base_erp
 
     results = {}
     for ch_idx, ch_name in enumerate(ch_names):
@@ -129,17 +131,15 @@ def compute_erp_metrics(target_epochs, standard_epochs, sr, ch_names, window):
         diff_slice = diff_erp[ch_idx, win_start:win_end]
         peak_amp = float(diff_slice.max())
         peak_latency_ms = window[0] + float(np.argmax(diff_slice)) * 1000 / sr
-
-        # Also check for negative peak (for MMN)
         neg_peak_amp = float(diff_slice.min())
         neg_peak_latency_ms = window[0] + float(np.argmin(diff_slice)) * 1000 / sr
 
         # t-test on mean amplitude in window
-        target_window = target_epochs[:, ch_idx, win_start:win_end].mean(axis=1)
-        standard_window = standard_epochs[:, ch_idx, win_start:win_end].mean(axis=1)
+        cond_window = condition_epochs[:, ch_idx, win_start:win_end].mean(axis=1)
+        base_window = baseline_epochs[:, ch_idx, win_start:win_end].mean(axis=1)
 
-        if len(target_window) > 1 and len(standard_window) > 1:
-            t_stat, p_value = ttest_ind(target_window, standard_window)
+        if len(cond_window) > 1 and len(base_window) > 1:
+            t_stat, p_value = ttest_ind(cond_window, base_window)
         else:
             t_stat, p_value = 0.0, 1.0
 
@@ -153,55 +153,63 @@ def compute_erp_metrics(target_epochs, standard_epochs, sr, ch_names, window):
             "significant": p_value < 0.05,
         }
 
-    return results, target_erp, standard_erp, diff_erp
+    return results, cond_erp, base_erp, diff_erp
 
 
-def print_oddball_analysis(p300_results, mmn_results, ch_names, n_target, n_standard, n_rejected, n_total):
-    """Print analysis to stdout."""
-    print(f"Epochs: {n_target} target, {n_standard} standard, {n_rejected} rejected / {n_total} total")
-    print()
-
+def print_erp_table(title, results, ch_names, positive=True):
+    """Print an ERP analysis table."""
     print("=" * 75)
-    print("P300 ANALYSIS (250-500 ms window)")
+    print(title)
     print("=" * 75)
-    print(f"  {'Channel':6s}  {'Peak (µV)':>10s}  {'Latency':>8s}  {'t-stat':>8s}  {'p-value':>8s}  {'Sig':>4s}")
+    if positive:
+        print(f"  {'Channel':6s}  {'Peak (µV)':>10s}  {'Latency':>8s}  {'t-stat':>8s}  {'p-value':>8s}  {'Sig':>4s}")
+    else:
+        print(f"  {'Channel':6s}  {'Neg Peak':>10s}  {'Latency':>8s}  {'t-stat':>8s}  {'p-value':>8s}  {'Sig':>4s}")
     print("-" * 75)
 
     for ch_name in ch_names:
-        r = p300_results[ch_name]
+        r = results[ch_name]
         sig = " ***" if r["significant"] else ""
+        key = "peak_amplitude_uv" if positive else "neg_peak_amplitude_uv"
+        lat_key = "peak_latency_ms" if positive else "neg_peak_latency_ms"
         print(
-            f"  {ch_name:6s}  {r['peak_amplitude_uv']:+10.2f}  {r['peak_latency_ms']:7.0f}ms"
+            f"  {ch_name:6s}  {r[key]:+10.2f}  {r[lat_key]:7.0f}ms"
             f"  {r['t_statistic']:+8.2f}  {r['p_value']:8.4f}  {sig}"
         )
     print()
 
-    print("=" * 75)
-    print("MMN ANALYSIS (150-250 ms window, negative peak)")
-    print("=" * 75)
-    print(f"  {'Channel':6s}  {'Neg Peak':>10s}  {'Latency':>8s}  {'t-stat':>8s}  {'p-value':>8s}  {'Sig':>4s}")
-    print("-" * 75)
+
+def erp_table_md(title, results, ch_names, positive=True):
+    """Generate markdown ERP table."""
+    lines = [f"## {title}", ""]
+    key = "peak_amplitude_uv" if positive else "neg_peak_amplitude_uv"
+    lat_key = "peak_latency_ms" if positive else "neg_peak_latency_ms"
+    col_name = "Peak (µV)" if positive else "Neg Peak (µV)"
+
+    lines.append(f"| Channel | {col_name} | Latency | t-stat | p-value | Sig |")
+    lines.append(f"|---------|{'---' * 5}|---------|--------|---------|-----|")
 
     for ch_name in ch_names:
-        r = mmn_results[ch_name]
-        sig = " ***" if r["significant"] else ""
-        print(
-            f"  {ch_name:6s}  {r['neg_peak_amplitude_uv']:+10.2f}  {r['neg_peak_latency_ms']:7.0f}ms"
-            f"  {r['t_statistic']:+8.2f}  {r['p_value']:8.4f}  {sig}"
+        r = results[ch_name]
+        sig = "**Yes**" if r["significant"] else "No"
+        lines.append(
+            f"| {ch_name} | {r[key]:+.2f} | {r[lat_key]:.0f}ms"
+            f" | {r['t_statistic']:+.2f} | {r['p_value']:.4f} | {sig} |"
         )
-    print()
+    lines.append("")
+    return lines
 
 
 def generate_oddball_report(
-    meta, eeg, p300_results, mmn_results, ch_names, sr,
-    n_target, n_standard, n_rejected, n_total,
-    target_erp, standard_erp,
+    meta, eeg, epoch_counts, ch_names, sr,
+    n_rejected, n_total,
+    p3b_results, mmn_results, p3a_results=None,
 ) -> str:
     """Generate markdown report."""
     lines = []
     started = datetime.fromtimestamp(meta["started_at"])
 
-    lines.append(f"# Auditory Oddball — Analysis Report")
+    lines.append("# Auditory Oddball — Analysis Report")
     lines.append("")
     lines.append(f"**Session:** `{meta['session_id']}`  ")
     lines.append(f"**Date:** {started.strftime('%Y-%m-%d %H:%M')}  ")
@@ -217,41 +225,23 @@ def generate_oddball_report(
     lines.append("| Metric | Count |")
     lines.append("|--------|-------|")
     lines.append(f"| Total markers | {n_total} |")
-    lines.append(f"| Target epochs | {n_target} |")
-    lines.append(f"| Standard epochs | {n_standard} |")
+    lines.append(f"| Target epochs | {epoch_counts['target']} |")
+    lines.append(f"| Standard epochs | {epoch_counts['standard']} |")
+    if epoch_counts["novel"] > 0:
+        lines.append(f"| Novel epochs | {epoch_counts['novel']} |")
     lines.append(f"| Rejected (artifact/boundary) | {n_rejected} |")
     lines.append(f"| Rejection rate | {rejection_rate:.1f}% |")
     lines.append("")
 
-    # P300 analysis
-    lines.append("## P300 Analysis (250-500 ms window)")
-    lines.append("")
-    lines.append("| Channel | Peak (µV) | Latency | t-stat | p-value | Sig |")
-    lines.append("|---------|-----------|---------|--------|---------|-----|")
+    # P3b: target vs standard
+    lines.extend(erp_table_md("P3b — Target vs Standard (250–500 ms)", p3b_results, ch_names))
 
-    for ch_name in ch_names:
-        r = p300_results[ch_name]
-        sig = "**Yes**" if r["significant"] else "No"
-        lines.append(
-            f"| {ch_name} | {r['peak_amplitude_uv']:+.2f} | {r['peak_latency_ms']:.0f}ms"
-            f" | {r['t_statistic']:+.2f} | {r['p_value']:.4f} | {sig} |"
-        )
-    lines.append("")
+    # P3a: novel vs standard (if present)
+    if p3a_results:
+        lines.extend(erp_table_md("P3a — Novel vs Standard (250–500 ms)", p3a_results, ch_names))
 
-    # MMN analysis
-    lines.append("## MMN Analysis (150-250 ms window)")
-    lines.append("")
-    lines.append("| Channel | Neg Peak (µV) | Latency | t-stat | p-value | Sig |")
-    lines.append("|---------|---------------|---------|--------|---------|-----|")
-
-    for ch_name in ch_names:
-        r = mmn_results[ch_name]
-        sig = "**Yes**" if r["significant"] else "No"
-        lines.append(
-            f"| {ch_name} | {r['neg_peak_amplitude_uv']:+.2f} | {r['neg_peak_latency_ms']:.0f}ms"
-            f" | {r['t_statistic']:+.2f} | {r['p_value']:.4f} | {sig} |"
-        )
-    lines.append("")
+    # MMN: target vs standard
+    lines.extend(erp_table_md("MMN — Target vs Standard (150–250 ms)", mmn_results, ch_names, positive=False))
 
     return "\n".join(lines)
 
@@ -275,44 +265,49 @@ def main():
     eeg_filt = bandpass_filter(eeg, sr)
 
     # Extract epochs
-    target_epochs, standard_epochs, n_rejected, n_total = extract_oddball_epochs(
-        meta, eeg_filt, timestamps, sr
-    )
-    n_target = len(target_epochs)
-    n_standard = len(standard_epochs)
+    epochs, n_rejected, n_total = extract_oddball_epochs(meta, eeg_filt, timestamps, sr)
+    epoch_counts = {k: len(v) for k, v in epochs.items()}
 
-    print(f"Epochs: {n_target} target, {n_standard} standard, {n_rejected} rejected / {n_total} total")
+    print(f"Epochs: {epoch_counts['target']} target, {epoch_counts['standard']} standard, "
+          f"{epoch_counts['novel']} novel, {n_rejected} rejected / {n_total} total")
     print()
 
-    if n_target < 2 or n_standard < 2:
+    if epoch_counts["target"] < 2 or epoch_counts["standard"] < 2:
         print("Not enough epochs for ERP analysis.")
         return
 
-    # P300 analysis (250-500 ms)
-    p300_results, target_erp, standard_erp, _ = compute_erp_metrics(
-        target_epochs, standard_epochs, sr, ch_names, P300_WINDOW
+    # P3b: target vs standard (250-500 ms)
+    p3b_results, _, _, _ = compute_erp_metrics(
+        epochs["target"], epochs["standard"], sr, ch_names, P300_WINDOW
     )
 
-    # MMN analysis (150-250 ms)
+    # MMN: target vs standard (150-250 ms)
     mmn_results, _, _, _ = compute_erp_metrics(
-        target_epochs, standard_epochs, sr, ch_names, MMN_WINDOW
+        epochs["target"], epochs["standard"], sr, ch_names, MMN_WINDOW
     )
+
+    # P3a: novel vs standard (if novels present)
+    p3a_results = None
+    if epoch_counts["novel"] >= 2:
+        p3a_results, _, _, _ = compute_erp_metrics(
+            epochs["novel"], epochs["standard"], sr, ch_names, P300_WINDOW
+        )
 
     if args.report:
         report = generate_oddball_report(
-            meta, eeg, p300_results, mmn_results, ch_names, sr,
-            n_target, n_standard, n_rejected, n_total,
-            target_erp, standard_erp,
+            meta, eeg, epoch_counts, ch_names, sr,
+            n_rejected, n_total,
+            p3b_results, mmn_results, p3a_results,
         )
         session_dir = SESSIONS_DIR / meta["session_id"]
         report_path = session_dir / "report.md"
         report_path.write_text(report)
         print(f"Report written to {report_path}")
     else:
-        print_oddball_analysis(
-            p300_results, mmn_results, ch_names,
-            n_target, n_standard, n_rejected, n_total,
-        )
+        print_erp_table("P3b — TARGET vs STANDARD (250-500 ms)", p3b_results, ch_names)
+        if p3a_results:
+            print_erp_table("P3a — NOVEL vs STANDARD (250-500 ms)", p3a_results, ch_names)
+        print_erp_table("MMN — TARGET vs STANDARD (150-250 ms, negative peak)", mmn_results, ch_names, positive=False)
 
 
 if __name__ == "__main__":

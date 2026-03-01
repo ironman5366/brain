@@ -180,8 +180,12 @@ export function useExperiment() {
               });
 
               // Play audio stimulus if applicable
-              if (trial.stimulus.type === "audio" && trial.stimulus.frequency) {
-                playTone(trial.stimulus.frequency, trial.stimulus.durationMs);
+              if (trial.stimulus.type === "audio") {
+                if (trial.stimulus.novel) {
+                  playNovelSound(trial.stimulus.durationMs);
+                } else if (trial.stimulus.frequency) {
+                  playTone(trial.stimulus.frequency, trial.stimulus.durationMs);
+                }
               }
 
               await runTrial(trial, blockIdx, setPhase);
@@ -300,6 +304,76 @@ function playTone(frequency = 660, durationMs = 150) {
   osc.stop(audioCtx.currentTime + durationMs / 1000);
 }
 
+function playNovelSound(durationMs = 100) {
+  if (!audioCtx) audioCtx = new AudioContext();
+  const ctx = audioCtx;
+  const t = ctx.currentTime;
+  const dur = durationMs / 1000;
+
+  // Output gain with fade-out envelope
+  const out = ctx.createGain();
+  out.gain.setValueAtTime(0.3, t);
+  out.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  out.connect(ctx.destination);
+
+  const variant = Math.floor(Math.random() * 4);
+
+  if (variant === 0) {
+    // White noise burst
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(out);
+    src.start(t);
+    src.stop(t + dur);
+  } else if (variant === 1) {
+    // Frequency sweep (chirp)
+    const osc = ctx.createOscillator();
+    const startFreq = 200 + Math.random() * 800;
+    const endFreq = 800 + Math.random() * 1200;
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(startFreq, t);
+    osc.frequency.linearRampToValueAtTime(endFreq, t + dur);
+    osc.connect(out);
+    osc.start(t);
+    osc.stop(t + dur);
+  } else if (variant === 2) {
+    // Complex tone — 3 oscillators at random frequencies
+    const types: OscillatorType[] = ["sine", "square", "triangle", "sawtooth"];
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      g.gain.value = 0.33;
+      osc.type = types[Math.floor(Math.random() * types.length)];
+      osc.frequency.value = 200 + Math.random() * 1800;
+      osc.connect(g);
+      g.connect(out);
+      osc.start(t);
+      osc.stop(t + dur);
+    }
+  } else {
+    // AM noise — noise modulated by a low-frequency oscillator
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const mod = ctx.createOscillator();
+    const modGain = ctx.createGain();
+    mod.frequency.value = 20 + Math.random() * 40;
+    modGain.gain.value = 0.5;
+    mod.connect(modGain);
+    modGain.connect(out.gain);
+    src.connect(out);
+    mod.start(t);
+    src.start(t);
+    mod.stop(t + dur);
+    src.stop(t + dur);
+  }
+}
+
 // --- Helpers ---
 
 function generateTrials(
@@ -312,12 +386,15 @@ function generateTrials(
     case "oddball": {
       const gen = generator as OddballGenerator;
       const nTarget = Math.round(gen.totalTrials * gen.targetRatio);
-      const nStandard = gen.totalTrials - nTarget;
+      const nDistractor = Math.round(gen.totalTrials * (gen.distractorRatio ?? 0));
+      const nStandard = gen.totalTrials - nTarget - nDistractor;
 
-      // Build boolean sequence (true = target)
-      const seq: boolean[] = [
-        ...Array<boolean>(nTarget).fill(true),
-        ...Array<boolean>(nStandard).fill(false),
+      // Build sequence: "target" | "novel" | "standard"
+      type TrialType = "target" | "novel" | "standard";
+      const seq: TrialType[] = [
+        ...Array<TrialType>(nTarget).fill("target"),
+        ...Array<TrialType>(nDistractor).fill("novel"),
+        ...Array<TrialType>(nStandard).fill("standard"),
       ];
 
       // Fisher-Yates shuffle
@@ -326,11 +403,12 @@ function generateTrials(
         [seq[i], seq[j]] = [seq[j], seq[i]];
       }
 
-      // Fix consecutive targets: swap second target with a later standard
+      // Fix consecutive rare stimuli (targets and novels)
+      const isRare = (t: TrialType) => t !== "standard";
       for (let i = 1; i < seq.length; i++) {
-        if (seq[i] && seq[i - 1]) {
+        if (isRare(seq[i]) && isRare(seq[i - 1])) {
           for (let j = i + 1; j < seq.length; j++) {
-            if (!seq[j] && (j + 1 >= seq.length || !seq[j + 1])) {
+            if (seq[j] === "standard" && (j + 1 >= seq.length || !isRare(seq[j + 1]))) {
               [seq[i], seq[j]] = [seq[j], seq[i]];
               break;
             }
@@ -338,15 +416,21 @@ function generateTrials(
         }
       }
 
-      return seq.map((isTarget, idx) => {
+      const distractor = gen.stimuli.distractors?.[0] ?? gen.stimuli.standard;
+
+      return seq.map((trialType, idx) => {
         const jitter = gen.timing.isiJitterMs
           ? (Math.random() - 0.5) * 2 * gen.timing.isiJitterMs
           : 0;
+        const stimulus =
+          trialType === "target" ? gen.stimuli.target
+          : trialType === "novel" ? distractor
+          : gen.stimuli.standard;
         return {
           id: `oddball-${idx}`,
-          stimulus: isTarget ? gen.stimuli.target : gen.stimuli.standard,
+          stimulus,
           durationMs: gen.timing.stimulusDurationMs + gen.timing.isiMs + jitter,
-          markerCode: isTarget ? "oddball_target" : "oddball_standard",
+          markerCode: `oddball_${trialType}`,
           captureResponse: gen.requiresResponse,
           responseWindowMs: gen.responseWindowMs,
         };
