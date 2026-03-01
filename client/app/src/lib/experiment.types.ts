@@ -112,6 +112,19 @@ export interface SSVEPGenerator {
   targetFrequencyHz?: number;
 }
 
+export interface P300Generator {
+  type: "p300";
+  /** 36 characters, row-major (6×6 Farwell-Donchin matrix) */
+  matrix: string[];
+  /** Target letters for copy-spelling, one per character attempt */
+  targetLetters: string[];
+  flashDurationMs: number;
+  isiMs: number;
+  sequencesPerCharacter: number;
+  preCharacterMs: number;
+  postCharacterMs: number;
+}
+
 export interface SpatialCueGenerator {
   type: "spatial-cue";
   totalTrials: number;
@@ -132,6 +145,7 @@ export type TrialGeneratorDef =
   | OddballGenerator
   | RSVPGenerator
   | SSVEPGenerator
+  | P300Generator
   | SpatialCueGenerator;
 
 // ---- Block & Protocol ----
@@ -161,6 +175,7 @@ export type ExperimentPhase =
   | { type: "blockInstruction"; blockIndex: number; instruction: string }
   | { type: "trial"; blockIndex: number; trialIndex: number; stimulus: StimulusDef; remainingMs: number }
   | { type: "ssvepTrial"; blockIndex: number; frequencies: SSVEPFrequency[]; targetFrequencyHz?: number; remainingMs: number }
+  | { type: "p300Trial"; blockIndex: number; matrix: string[]; targetLetter: string; highlightedRow: number | null; highlightedCol: number | null; remainingMs: number; currentCharIndex: number; totalChars: number; charPhase: "pre" | "flashing" | "post" }
   | { type: "blockRest"; blockIndex: number; remainingMs: number }
   | { type: "complete"; sessionId: string }
   | { type: "error"; message: string };

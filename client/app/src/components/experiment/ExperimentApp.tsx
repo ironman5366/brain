@@ -1,11 +1,14 @@
-import { useExperiment } from "../../hooks/useExperiment";
+import { useExperiment, type ExperimentProgress } from "../../hooks/useExperiment";
 import type { Protocol } from "../../lib/experiment.types";
 import { ALPHA_PROTOCOL } from "../../lib/protocols/alpha";
 import { SSVEP_PROTOCOL } from "../../lib/protocols/ssvep";
+import { P300_PROTOCOL } from "../../lib/protocols/p300";
+import { ODDBALL_PROTOCOL } from "../../lib/protocols/oddball";
 import { StimulusRenderer } from "./StimulusRenderer";
 import { SSVEPRenderer } from "./SSVEPRenderer";
+import { P300Renderer } from "./P300Renderer";
 
-const PROTOCOLS: Protocol[] = [ALPHA_PROTOCOL, SSVEP_PROTOCOL];
+const PROTOCOLS: Protocol[] = [ALPHA_PROTOCOL, SSVEP_PROTOCOL, P300_PROTOCOL, ODDBALL_PROTOCOL];
 
 export function ExperimentApp() {
   const experiment = useExperiment();
@@ -54,6 +57,28 @@ export function ExperimentApp() {
         <SSVEPRenderer
           frequencies={phase.frequencies}
           targetFrequencyHz={phase.targetFrequencyHz}
+        />
+        <TrialFooter
+          remainingMs={phase.remainingMs}
+          progress={experiment.progress}
+          onAbort={() => experiment.abort()}
+        />
+      </div>
+    );
+  }
+
+  // P300 trial — matrix with row/col flashing
+  if (phase.type === "p300Trial") {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <P300Renderer
+          matrix={phase.matrix}
+          targetLetter={phase.targetLetter}
+          highlightedRow={phase.highlightedRow}
+          highlightedCol={phase.highlightedCol}
+          charPhase={phase.charPhase}
+          currentCharIndex={phase.currentCharIndex}
+          totalChars={phase.totalChars}
         />
         <TrialFooter
           remainingMs={phase.remainingMs}
@@ -207,91 +232,106 @@ function ProtocolPicker({
         flex: 1,
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
+        overflow: "auto",
         padding: "2rem",
-        gap: "2rem",
       }}
     >
       <h2
         style={{
           fontFamily: "monospace",
           color: "#eee",
-          margin: 0,
+          margin: "0 0 1.5rem",
           fontSize: "1.1rem",
+          textAlign: "center",
         }}
       >
         Select Experiment
       </h2>
 
-      {protocols.map((p) => {
-        const totalSec = p.blocks.reduce((sum, b) => {
-          let trialMs = 0;
-          if (b.trialGenerator.type === "fixed") {
-            trialMs = b.trialGenerator.trials.reduce((s, t) => s + t.durationMs, 0);
-          } else if (b.trialGenerator.type === "ssvep") {
-            trialMs = b.trialGenerator.durationMs;
-          }
-          return sum + trialMs / 1000 + b.restAfterMs / 1000;
-        }, 0);
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+          gap: "1rem",
+          maxWidth: 800,
+          width: "100%",
+          margin: "0 auto",
+        }}
+      >
+        {protocols.map((p) => {
+          const totalSec = p.blocks.reduce((sum, b) => {
+            let trialMs = 0;
+            if (b.trialGenerator.type === "fixed") {
+              trialMs = b.trialGenerator.trials.reduce((s, t) => s + t.durationMs, 0);
+            } else if (b.trialGenerator.type === "ssvep") {
+              trialMs = b.trialGenerator.durationMs;
+            } else if (b.trialGenerator.type === "p300") {
+              const g = b.trialGenerator;
+              const flashMs = (g.flashDurationMs + g.isiMs) * 12 * g.sequencesPerCharacter;
+              trialMs = g.targetLetters.length * (g.preCharacterMs + flashMs + g.postCharacterMs);
+            } else if (b.trialGenerator.type === "oddball") {
+              const g = b.trialGenerator;
+              trialMs = g.totalTrials * (g.timing.stimulusDurationMs + g.timing.isiMs);
+            }
+            return sum + trialMs / 1000 + b.restAfterMs / 1000;
+          }, 0);
 
-        return (
-          <button
-            key={p.id}
-            onClick={() => onStart(p)}
-            style={{
-              padding: "1.5rem 2rem",
-              maxWidth: 500,
-              width: "100%",
-              backgroundColor: "#1a1a2e",
-              border: "1px solid #333",
-              borderRadius: 12,
-              cursor: "pointer",
-              color: "#eee",
-              textAlign: "left",
-              transition: "border-color 0.15s, background-color 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = "#555";
-              e.currentTarget.style.backgroundColor = "#1e1e38";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = "#333";
-              e.currentTarget.style.backgroundColor = "#1a1a2e";
-            }}
-          >
-            <div
+          return (
+            <button
+              key={p.id}
+              onClick={() => onStart(p)}
               style={{
-                fontFamily: "monospace",
-                fontSize: "1.1rem",
-                fontWeight: "bold",
+                padding: "1.5rem 2rem",
+                backgroundColor: "#1a1a2e",
+                border: "1px solid #333",
+                borderRadius: 12,
+                cursor: "pointer",
+                color: "#eee",
+                textAlign: "left",
+                transition: "border-color 0.15s, background-color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "#555";
+                e.currentTarget.style.backgroundColor = "#1e1e38";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "#333";
+                e.currentTarget.style.backgroundColor = "#1a1a2e";
               }}
             >
-              {p.name}
-            </div>
-            <div
-              style={{
-                fontFamily: "monospace",
-                fontSize: "0.8rem",
-                color: "#888",
-                marginTop: "0.5rem",
-              }}
-            >
-              {p.description}
-            </div>
-            <div
-              style={{
-                fontFamily: "monospace",
-                fontSize: "0.75rem",
-                color: "#555",
-                marginTop: "0.25rem",
-              }}
-            >
-              {p.blocks.length} blocks / ~{Math.round(totalSec)}s total
-            </div>
-          </button>
-        );
-      })}
+              <div
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: "1.1rem",
+                  fontWeight: "bold",
+                }}
+              >
+                {p.name}
+              </div>
+              <div
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: "0.8rem",
+                  color: "#888",
+                  marginTop: "0.5rem",
+                }}
+              >
+                {p.description}
+              </div>
+              <div
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: "0.75rem",
+                  color: "#555",
+                  marginTop: "0.25rem",
+                }}
+              >
+                {p.blocks.length} blocks / ~{Math.round(totalSec)}s total
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -388,9 +428,12 @@ function TrialFooter({
   onAbort,
 }: {
   remainingMs: number;
-  progress: { block: number; totalBlocks: number } | null;
+  progress: ExperimentProgress | null;
   onAbort: () => void;
 }) {
+  // For many-trial blocks (oddball etc.), show trial progress instead of per-trial countdown
+  const showTrialProgress = progress && progress.totalTrials > 1;
+
   return (
     <div
       style={{
@@ -412,7 +455,9 @@ function TrialFooter({
       <span
         style={{ fontFamily: "monospace", fontSize: "0.85rem", color: "#555" }}
       >
-        {Math.ceil(remainingMs / 1000)}s
+        {showTrialProgress
+          ? `${progress.trial + 1} / ${progress.totalTrials}`
+          : `${Math.ceil(remainingMs / 1000)}s`}
       </span>
       <button
         onClick={onAbort}

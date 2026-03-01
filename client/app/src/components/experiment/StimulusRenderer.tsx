@@ -62,6 +62,30 @@ export function StimulusRenderer({ stimulus }: Props) {
         </div>
       );
 
+    case "audio":
+      return (
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "#141416",
+          }}
+        >
+          <span
+            style={{
+              fontFamily: "monospace",
+              fontSize: "4rem",
+              color: "#888",
+              userSelect: "none",
+            }}
+          >
+            +
+          </span>
+        </div>
+      );
+
     default:
       return (
         <div

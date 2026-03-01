@@ -6,6 +6,8 @@ import type {
   TrialDef,
   SSVEPGenerator,
   SSVEPFrequency,
+  P300Generator,
+  OddballGenerator,
 } from "../lib/experiment.types";
 import { MarkerSender } from "../lib/markers";
 
@@ -97,6 +99,11 @@ export function useExperiment() {
 
           if (abortRef.current) break;
 
+          // Ensure AudioContext is resumed (browsers require user gesture)
+          if (audioCtx && audioCtx.state === "suspended") {
+            await audioCtx.resume();
+          }
+
           // Send block_start marker
           markers.send({
             code: "block_start",
@@ -133,6 +140,18 @@ export function useExperiment() {
               timestamp: performance.now(),
               block_id: block.id,
             });
+          } else if (block.trialGenerator.type === "p300") {
+            // P300: scheduled row/col flashes across multiple characters
+            await runP300Block(
+              block.trialGenerator,
+              blockIdx,
+              protocol.blocks.length,
+              block.id,
+              setPhase,
+              setProgress,
+              markers,
+              abortRef,
+            );
           } else {
             // Standard trial-based blocks
             const trials = generateTrials(block.trialGenerator);
@@ -159,6 +178,11 @@ export function useExperiment() {
                 block_id: block.id,
                 trial_index: trialIdx,
               });
+
+              // Play audio stimulus if applicable
+              if (trial.stimulus.type === "audio" && trial.stimulus.frequency) {
+                playTone(trial.stimulus.frequency, trial.stimulus.durationMs);
+              }
 
               await runTrial(trial, blockIdx, setPhase);
             }
@@ -284,8 +308,52 @@ function generateTrials(
   switch (generator.type) {
     case "fixed":
       return generator.trials;
+
+    case "oddball": {
+      const gen = generator as OddballGenerator;
+      const nTarget = Math.round(gen.totalTrials * gen.targetRatio);
+      const nStandard = gen.totalTrials - nTarget;
+
+      // Build boolean sequence (true = target)
+      const seq: boolean[] = [
+        ...Array<boolean>(nTarget).fill(true),
+        ...Array<boolean>(nStandard).fill(false),
+      ];
+
+      // Fisher-Yates shuffle
+      for (let i = seq.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [seq[i], seq[j]] = [seq[j], seq[i]];
+      }
+
+      // Fix consecutive targets: swap second target with a later standard
+      for (let i = 1; i < seq.length; i++) {
+        if (seq[i] && seq[i - 1]) {
+          for (let j = i + 1; j < seq.length; j++) {
+            if (!seq[j] && (j + 1 >= seq.length || !seq[j + 1])) {
+              [seq[i], seq[j]] = [seq[j], seq[i]];
+              break;
+            }
+          }
+        }
+      }
+
+      return seq.map((isTarget, idx) => {
+        const jitter = gen.timing.isiJitterMs
+          ? (Math.random() - 0.5) * 2 * gen.timing.isiJitterMs
+          : 0;
+        return {
+          id: `oddball-${idx}`,
+          stimulus: isTarget ? gen.stimuli.target : gen.stimuli.standard,
+          durationMs: gen.timing.stimulusDurationMs + gen.timing.isiMs + jitter,
+          markerCode: isTarget ? "oddball_target" : "oddball_standard",
+          captureResponse: gen.requiresResponse,
+          responseWindowMs: gen.responseWindowMs,
+        };
+      });
+    }
+
     default:
-      // Other generators will be implemented as needed
       throw new Error(`Trial generator type "${generator.type}" not yet implemented`);
   }
 }
@@ -342,6 +410,241 @@ function runSSVEPTrial(
         frequencies: generator.frequencies,
         targetFrequencyHz: generator.targetFrequencyHz,
         remainingMs: remaining,
+      });
+
+      if (remaining > 0) {
+        requestAnimationFrame(update);
+      } else {
+        resolve();
+      }
+    };
+
+    update();
+  });
+}
+
+// --- P300 flash schedule ---
+
+interface FlashEvent {
+  timeOffsetMs: number;
+  type: "row" | "col";
+  index: number;
+  isTarget: boolean;
+  sequenceNum: number;
+}
+
+interface P300CharSchedule {
+  targetLetter: string;
+  charIndex: number;
+  preStartMs: number;
+  flashStartMs: number;
+  flashes: FlashEvent[];
+  postStartMs: number;
+  endMs: number;
+}
+
+function buildP300Schedule(gen: P300Generator): {
+  chars: P300CharSchedule[];
+  totalMs: number;
+} {
+  const { matrix, targetLetters, flashDurationMs, isiMs, sequencesPerCharacter, preCharacterMs, postCharacterMs } = gen;
+  const soaMs = flashDurationMs + isiMs;
+  const flashesPerSeq = 12; // 6 rows + 6 cols
+  const chars: P300CharSchedule[] = [];
+  let cursor = 0;
+
+  for (let ci = 0; ci < targetLetters.length; ci++) {
+    const target = targetLetters[ci];
+    const targetIdx = matrix.indexOf(target);
+    const targetRow = Math.floor(targetIdx / 6);
+    const targetCol = targetIdx % 6;
+
+    const preStartMs = cursor;
+    cursor += preCharacterMs;
+    const flashStartMs = cursor;
+
+    const flashes: FlashEvent[] = [];
+
+    for (let seq = 0; seq < sequencesPerCharacter; seq++) {
+      // Build shuffled order: rows 0-5 then cols 0-5
+      const order: { type: "row" | "col"; index: number }[] = [];
+      for (let i = 0; i < 6; i++) order.push({ type: "row", index: i });
+      for (let i = 0; i < 6; i++) order.push({ type: "col", index: i });
+      // Fisher-Yates shuffle
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+
+      for (let fi = 0; fi < flashesPerSeq; fi++) {
+        const flash = order[fi];
+        const isTarget =
+          (flash.type === "row" && flash.index === targetRow) ||
+          (flash.type === "col" && flash.index === targetCol);
+
+        flashes.push({
+          timeOffsetMs: cursor - flashStartMs + fi * soaMs,
+          type: flash.type,
+          index: flash.index,
+          isTarget,
+          sequenceNum: seq,
+        });
+      }
+
+      cursor += flashesPerSeq * soaMs;
+    }
+
+    const postStartMs = cursor;
+    cursor += postCharacterMs;
+
+    chars.push({
+      targetLetter: target,
+      charIndex: ci,
+      preStartMs,
+      flashStartMs,
+      flashes,
+      postStartMs,
+      endMs: cursor,
+    });
+  }
+
+  return { chars, totalMs: cursor };
+}
+
+async function runP300Block(
+  gen: P300Generator,
+  blockIndex: number,
+  totalBlocks: number,
+  blockId: string,
+  setPhase: React.Dispatch<React.SetStateAction<ExperimentPhase>>,
+  setProgress: React.Dispatch<React.SetStateAction<ExperimentProgress | null>>,
+  markers: MarkerSender,
+  abortRef: React.RefObject<boolean>,
+): Promise<void> {
+  const { chars, totalMs } = buildP300Schedule(gen);
+
+  setProgress({
+    block: blockIndex,
+    totalBlocks,
+    trial: 0,
+    totalTrials: gen.targetLetters.length,
+  });
+
+  return new Promise((resolve) => {
+    const startTime = performance.now();
+    let currentCharIdx = -1;
+    let lastFlashIdx = -1;
+    let sentCharEnd = false;
+
+    const update = () => {
+      if (abortRef.current) { resolve(); return; }
+
+      const now = performance.now();
+      const elapsed = now - startTime;
+      const remaining = Math.max(0, totalMs - elapsed);
+
+      // Find which character we're in
+      let charIdx = 0;
+      for (let i = 0; i < chars.length; i++) {
+        if (elapsed >= chars[i].preStartMs) charIdx = i;
+      }
+      const ch = chars[charIdx];
+
+      // Character changed
+      if (charIdx !== currentCharIdx) {
+        // End previous character
+        if (currentCharIdx >= 0 && !sentCharEnd) {
+          markers.send({
+            code: "p300_char_end",
+            timestamp: now,
+            block_id: blockId,
+            metadata: { target_letter: chars[currentCharIdx].targetLetter, char_index: currentCharIdx },
+          });
+        }
+
+        currentCharIdx = charIdx;
+        lastFlashIdx = -1;
+        sentCharEnd = false;
+
+        setProgress((prev) => prev ? { ...prev, trial: charIdx } : null);
+
+        markers.send({
+          code: "p300_char_start",
+          timestamp: now,
+          block_id: blockId,
+          metadata: { target_letter: ch.targetLetter, char_index: charIdx },
+        });
+      }
+
+      // Determine charPhase and highlight state
+      let charPhase: "pre" | "flashing" | "post" = "pre";
+      let highlightedRow: number | null = null;
+      let highlightedCol: number | null = null;
+
+      const relativeMs = elapsed - ch.preStartMs;
+
+      if (relativeMs < gen.preCharacterMs) {
+        charPhase = "pre";
+      } else if (elapsed >= ch.postStartMs) {
+        charPhase = "post";
+        if (!sentCharEnd && charIdx === chars.length - 1 && remaining <= 0) {
+          markers.send({
+            code: "p300_char_end",
+            timestamp: now,
+            block_id: blockId,
+            metadata: { target_letter: ch.targetLetter, char_index: charIdx },
+          });
+          sentCharEnd = true;
+        }
+      } else {
+        charPhase = "flashing";
+        const flashElapsed = elapsed - ch.flashStartMs;
+
+        // Find current flash
+        for (let fi = ch.flashes.length - 1; fi >= 0; fi--) {
+          const f = ch.flashes[fi];
+          if (flashElapsed >= f.timeOffsetMs) {
+            const flashAge = flashElapsed - f.timeOffsetMs;
+            if (flashAge < gen.flashDurationMs) {
+              // Flash is ON
+              if (f.type === "row") highlightedRow = f.index;
+              else highlightedCol = f.index;
+
+              // Send marker on first frame of this flash
+              if (fi !== lastFlashIdx) {
+                lastFlashIdx = fi;
+                markers.send({
+                  code: "p300_flash",
+                  timestamp: now,
+                  block_id: blockId,
+                  metadata: {
+                    flash_type: f.type,
+                    flash_index: f.index,
+                    is_target: f.isTarget,
+                    sequence_num: f.sequenceNum,
+                    char_index: charIdx,
+                    target_letter: ch.targetLetter,
+                  },
+                });
+              }
+            }
+            // else: in ISI gap, highlight stays null
+            break;
+          }
+        }
+      }
+
+      setPhase({
+        type: "p300Trial",
+        blockIndex,
+        matrix: gen.matrix,
+        targetLetter: ch.targetLetter,
+        highlightedRow,
+        highlightedCol,
+        remainingMs: remaining,
+        currentCharIndex: charIdx,
+        totalChars: gen.targetLetters.length,
+        charPhase,
       });
 
       if (remaining > 0) {

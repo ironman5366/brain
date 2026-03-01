@@ -493,6 +493,19 @@ def main():
     results = compute_block_bandpower(eeg, blocks, sr, ch_names)
 
     protocol = meta["protocol_id"]
+
+    if protocol.startswith("p300"):
+        print("P300 sessions use a separate analysis script:")
+        print("  uv run python scripts/analyze_p300.py")
+        print(f"  uv run python scripts/analyze_p300.py {meta['session_id']}")
+        return
+
+    if protocol.startswith("auditory-oddball"):
+        print("Auditory oddball sessions use a separate analysis script:")
+        print("  uv run python scripts/analyze_oddball.py")
+        print(f"  uv run python scripts/analyze_oddball.py {meta['session_id']}")
+        return
+
     is_ssvep = protocol.startswith("ssvep")
     ssvep_info = extract_ssvep_info(meta) if is_ssvep else {}
 
