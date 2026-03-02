@@ -7,6 +7,7 @@ import { BandPowerApp } from "./components/bandpower/BandPowerApp";
 import { FFTApp } from "./components/fft/FFTApp";
 import { ExperimentApp } from "./components/experiment/ExperimentApp";
 import { BCIApp } from "./components/bci/BCIApp";
+import { CalibrationApp } from "./components/calibration/CalibrationApp";
 import { Dashboard } from "./components/Dashboard";
 import type { AppId } from "./components/Dashboard";
 
@@ -33,8 +34,9 @@ function App() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "1rem",
           borderBottom: "1px solid #333",
+          overflow: "hidden",
+          flexShrink: 0,
         }}
       >
         {view !== "dashboard" && (
@@ -113,6 +115,7 @@ function App() {
 
       {view === "experiment" && <ExperimentApp />}
       {view === "bci" && <BCIApp />}
+      {view === "calibration" && <CalibrationApp />}
     </div>
   );
 }

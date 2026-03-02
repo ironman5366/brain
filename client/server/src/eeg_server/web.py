@@ -18,6 +18,9 @@ from .config import BoardMode, ServerConfig
 from .cyton import CytonHeadset
 from .impedance import ImpedanceChecker, SyntheticImpedanceChecker
 from .bci import BCIController
+from .calibration import CalibrationController
+from .cyton import CYTON_WIRE_COLORS, CYTON_PIN_LABELS
+from .signal_quality import analyze_signal_quality
 from .session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -184,6 +187,7 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     bridge = WebSocketBridge(config, eeg_stream)
     impedance_lock = threading.Lock()
     bci = BCIController()
+    calibration = CalibrationController()
 
     sessions_dir = Path(__file__).resolve().parent.parent.parent.parent / "sessions"
     session_mgr = SessionManager(sessions_dir, eeg_stream)
@@ -527,5 +531,142 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     async def bci_play_sound(req: PlaySoundRequest):
         """Play a sound in the user's browser."""
         return await bci.play_sound(req.frequency, req.duration_ms, req.novel)
+
+    # --- Calibration Endpoints ---
+
+    @app.get("/api/calibration/events")
+    async def calibration_events():
+        """SSE stream for the calibration UI."""
+        return StreamingResponse(calibration.events(), media_type="text/event-stream")
+
+    @app.post("/api/calibration/check-impedance")
+    async def calibration_check_impedance():
+        """Run impedance check, return results enriched with wire colors."""
+        if not impedance_lock.acquire(blocking=False):
+            raise HTTPException(409, "Impedance check already in progress")
+
+        loop = asyncio.get_event_loop()
+        try:
+            if eeg_stream.headset is not None:
+                thresholds = eeg_stream.headset.get_impedance_thresholds()
+                wire_colors = eeg_stream.headset.wire_colors
+                pin_labels = eeg_stream.headset.pin_labels
+            else:
+                headset = CytonHeadset()
+                thresholds = headset.get_impedance_thresholds()
+                wire_colors = CYTON_WIRE_COLORS
+                pin_labels = CYTON_PIN_LABELS
+
+            if config.board_mode == BoardMode.SYNTHETIC:
+                checker = SyntheticImpedanceChecker(len(eeg_stream.eeg_channels))
+            else:
+                await loop.run_in_executor(None, eeg_stream.pause_stream)
+                await loop.run_in_executor(None, eeg_stream.board.start_stream)
+                checker = ImpedanceChecker(
+                    eeg_stream.board,
+                    eeg_stream.board_id,
+                    eeg_stream.eeg_channels,
+                    eeg_stream.headset,
+                )
+
+            raw_results = await loop.run_in_executor(None, checker.measure_all)
+
+            channels = []
+            for ch_idx, z in raw_results.items():
+                name = eeg_stream.channel_names[ch_idx]
+                if z < thresholds["good"]:
+                    rating = "good"
+                elif z < thresholds["ok"]:
+                    rating = "ok"
+                else:
+                    rating = "bad"
+
+                channels.append({
+                    "index": ch_idx,
+                    "name": name,
+                    "wire_color": wire_colors.get(name, "unknown"),
+                    "pin": pin_labels.get(name, "unknown"),
+                    "impedance_ohms": z,
+                    "impedance_kohms": round(z / 1000, 1),
+                    "rating": rating,
+                })
+
+            result = {
+                "channels": channels,
+                "thresholds": thresholds,
+                "all_good": all(c["rating"] == "good" for c in channels),
+            }
+
+            await calibration.push_impedance_update(result)
+            return result
+
+        except Exception as e:
+            logger.error("Calibration impedance check error: %s", e)
+            raise HTTPException(500, str(e))
+        finally:
+            if config.board_mode != BoardMode.SYNTHETIC:
+                try:
+                    await loop.run_in_executor(None, eeg_stream.board.stop_stream)
+                except Exception:
+                    pass
+                try:
+                    await loop.run_in_executor(None, eeg_stream.resume_stream)
+                except Exception as e:
+                    logger.error("Failed to resume stream: %s", e)
+            impedance_lock.release()
+
+    @app.get("/api/calibration/check-signal")
+    async def calibration_check_signal(
+        duration_sec: float = 3.0,
+        line_freq: float = 60.0,
+    ):
+        """Analyze live EEG signal quality on all channels."""
+        if not eeg_stream.is_running:
+            return {"error": "Board not streaming"}
+
+        num_samples = int(eeg_stream.sampling_rate * duration_sec)
+        data = eeg_stream.get_recent_data(num_samples)
+
+        if data.shape[1] < eeg_stream.sampling_rate:
+            return {"error": "Insufficient data", "samples": int(data.shape[1])}
+
+        if eeg_stream.headset is not None:
+            wire_colors = eeg_stream.headset.wire_colors
+            pin_labels = eeg_stream.headset.pin_labels
+        else:
+            wire_colors = CYTON_WIRE_COLORS
+            pin_labels = CYTON_PIN_LABELS
+
+        loop = asyncio.get_event_loop()
+        channel_results = await loop.run_in_executor(
+            None,
+            lambda: analyze_signal_quality(
+                data,
+                eeg_stream.eeg_channels,
+                eeg_stream.channel_names,
+                eeg_stream.sampling_rate,
+                line_freq,
+            ),
+        )
+
+        for ch in channel_results:
+            ch["wire_color"] = wire_colors.get(ch["name"], "unknown")
+            ch["pin"] = pin_labels.get(ch["name"], "unknown")
+
+        return {
+            "channels": channel_results,
+            "duration_sec": duration_sec,
+            "all_good": all(c["rating"] == "good" for c in channel_results),
+        }
+
+    @app.post("/api/calibration/message")
+    async def calibration_message(req: MessageRequest):
+        """Show a message from Claude in the calibration UI."""
+        return await calibration.send_message(req.text)
+
+    @app.get("/api/calibration/status")
+    async def calibration_status():
+        """Get current calibration state summary."""
+        return calibration._get_state()
 
     return app

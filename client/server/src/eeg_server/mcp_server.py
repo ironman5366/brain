@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(name="brain-bci")
 
-BASE_URL = os.environ.get("EEG_SERVER_URL", "http://localhost:8888")
+BASE_URL = os.environ.get("EEG_SERVER_URL", "http://localhost:8765")
 
 
 def _sync_post(path: str, body: dict | None = None) -> str:
@@ -190,6 +190,79 @@ def bci_stop() -> str:
     Returns: session_id, spelled text, total marker count.
     """
     return _sync_post("/api/bci/stop")
+
+
+# --- Calibration Tools ---
+
+
+@mcp.tool()
+def calibration_check_impedance() -> str:
+    """Check electrode impedance on all 8 channels.
+
+    Measures skin-electrode contact quality using lead-off detection.
+    Takes ~15 seconds. The EEG stream pauses briefly during measurement.
+
+    Returns per-channel impedance with wire colors for physical identification:
+    - Each channel: name, wire_color, pin, impedance_kohms, rating
+    - Ratings: "good" (<50 kOhm), "ok" (<200 kOhm), "bad" (>=200 kOhm)
+    - all_good: true if every channel is "good"
+
+    Wire colors (Ultracortex Mark IV):
+    Fp1=grey, Fp2=purple, C3=blue, C4=green,
+    P7=yellow, P8=orange, O1=red, O2=brown
+    Ear clips (SRB2 + BIAS) = black
+    """
+    return _sync_post_blocking("/api/calibration/check-impedance", timeout=30)
+
+
+@mcp.tool()
+def calibration_check_signal(duration_sec: float = 3.0) -> str:
+    """Analyze live EEG signal quality on all channels.
+
+    Reads recent EEG data from the ring buffer and computes per-channel metrics.
+    Does NOT pause the stream. Fast (~instant).
+
+    Per-channel metrics:
+    - rms_uv: RMS amplitude in microvolts (good: 10-50, flat: <2, noisy: >100)
+    - line_noise_db: 60 Hz power relative to broadband (good: <10 dB)
+    - dc_drift_uv: Low-frequency drift (good: <50 uV)
+    - has_alpha: Whether alpha rhythm (8-13 Hz) is detectable
+    - rating: "good", "ok", or "bad"
+    - issues: List of specific problems (high_noise, flat_signal, high_line_noise, dc_drift)
+    - wire_color: Physical wire color for this electrode
+    - psd_frequencies, psd_db: Per-channel power spectrum (0-60 Hz) for visualization
+
+    Wire colors: Fp1=grey, Fp2=purple, C3=blue, C4=green,
+    P7=yellow, P8=orange, O1=red, O2=brown
+
+    Args:
+        duration_sec: Seconds of recent EEG data to analyze (default 3.0).
+    """
+    return _sync_get("/api/calibration/check-signal", {"duration_sec": duration_sec})
+
+
+@mcp.tool()
+def calibration_message(text: str) -> str:
+    """Show a message to the user in the calibration UI.
+
+    Use this to give specific instructions about adjusting electrodes.
+    Always reference the wire color and electrode name together,
+    e.g. "Push down on the GREY wire (Fp1) and wiggle it slightly."
+
+    Args:
+        text: The instruction text to display prominently in the UI.
+    """
+    return _sync_post("/api/calibration/message", {"text": text})
+
+
+@mcp.tool()
+def calibration_status() -> str:
+    """Get a summary of the current calibration state.
+
+    Returns the most recent impedance results, signal quality results,
+    and the last few messages sent to the user.
+    """
+    return _sync_get("/api/calibration/status")
 
 
 if __name__ == "__main__":
