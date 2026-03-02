@@ -2,7 +2,7 @@ import { useSessions } from "../hooks/useSessions";
 import { SessionList } from "./sessions/SessionList";
 import { ReportView } from "./sessions/ReportView";
 
-export type AppId = "eeg" | "impedance" | "bandpower" | "fft" | "experiment";
+export type AppId = "eeg" | "impedance" | "bandpower" | "fft" | "experiment" | "bci";
 
 interface AppCard {
   id: AppId;
@@ -35,6 +35,11 @@ const APPS: AppCard[] = [
     id: "experiment",
     title: "Experiments",
     description: "Run EEG recording protocols",
+  },
+  {
+    id: "bci",
+    title: "BCI Speller",
+    description: "P300 speller controlled by Claude",
   },
 ];
 

@@ -17,6 +17,7 @@ from .board import EEGStream
 from .config import BoardMode, ServerConfig
 from .cyton import CytonHeadset
 from .impedance import ImpedanceChecker, SyntheticImpedanceChecker
+from .bci import BCIController
 from .session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -151,10 +152,38 @@ class StopSessionRequest(BaseModel):
     session_id: str
 
 
+class FlashRequest(BaseModel):
+    sequences: int = 5
+
+
+class FlashDoneRequest(BaseModel):
+    marker_count: int = 0
+
+
+class ProposeRequest(BaseModel):
+    letter: str
+    message: str = ""
+
+
+class FeedbackRequest(BaseModel):
+    accepted: bool
+
+
+class MessageRequest(BaseModel):
+    text: str
+
+
+class PlaySoundRequest(BaseModel):
+    frequency: int = 440
+    duration_ms: int = 200
+    novel: bool = False
+
+
 def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     app = FastAPI(title="EEG Server")
     bridge = WebSocketBridge(config, eeg_stream)
     impedance_lock = threading.Lock()
+    bci = BCIController()
 
     sessions_dir = Path(__file__).resolve().parent.parent.parent.parent / "sessions"
     session_mgr = SessionManager(sessions_dir, eeg_stream)
@@ -392,5 +421,111 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(404, f"Session not found: {session_id}")
         return {"ok": True}
+
+    # --- BCI Speller Endpoints ---
+
+    @app.get("/api/bci/events")
+    async def bci_events():
+        """SSE stream for the BCI UI."""
+        return StreamingResponse(bci.events(), media_type="text/event-stream")
+
+    @app.post("/api/bci/start")
+    async def bci_start():
+        """Start a BCI speller session."""
+        if not eeg_stream.is_running:
+            raise HTTPException(400, "Board not streaming")
+        try:
+            return await bci.start(session_mgr)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/bci/stop")
+    async def bci_stop():
+        """Stop the BCI session and save data."""
+        try:
+            return await bci.stop(session_mgr)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/bci/flash")
+    async def bci_flash(req: FlashRequest):
+        """Run N flash sequences. Blocks until the UI finishes flashing."""
+        try:
+            return await bci.flash(req.sequences)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/bci/flash-done")
+    async def bci_flash_done(req: FlashDoneRequest):
+        """Called by UI when flashing is complete."""
+        return bci.flash_complete(req.marker_count)
+
+    @app.get("/api/bci/epochs")
+    async def bci_epochs(
+        channels: str = "C3,C4,P7,P8",
+        window_start_ms: int = 250,
+        window_end_ms: int = 500,
+        filter_low: float = 0.5,
+        filter_high: float = 30.0,
+        artifact_threshold_uv: float = 150.0,
+    ):
+        """Get P300 row/column scores from the current session."""
+        loop = asyncio.get_event_loop()
+        try:
+            ch_list = [c.strip() for c in channels.split(",")]
+            return await loop.run_in_executor(
+                None,
+                lambda: bci.get_epochs(
+                    session_mgr,
+                    eeg_stream,
+                    channels=ch_list,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=window_end_ms,
+                    filter_low=filter_low,
+                    filter_high=filter_high,
+                    artifact_threshold_uv=artifact_threshold_uv,
+                ),
+            )
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/bci/snapshot")
+    async def bci_snapshot():
+        """Dump raw EEG + markers to a .npz file for custom analysis."""
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(
+                None, lambda: bci.snapshot(session_mgr, eeg_stream)
+            )
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/api/bci/status")
+    async def bci_status():
+        """Get current BCI state."""
+        return bci.status(session_mgr)
+
+    @app.post("/api/bci/propose")
+    async def bci_propose(req: ProposeRequest):
+        """Propose a letter. Blocks until user accepts or rejects."""
+        try:
+            return await bci.propose(req.letter, req.message)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/bci/feedback")
+    async def bci_feedback(req: FeedbackRequest):
+        """UI submits accept/reject for a proposed letter."""
+        return bci.submit_feedback(req.accepted)
+
+    @app.post("/api/bci/message")
+    async def bci_message(req: MessageRequest):
+        """Show a message in the BCI UI."""
+        return await bci.send_message(req.text)
+
+    @app.post("/api/bci/play-sound")
+    async def bci_play_sound(req: PlaySoundRequest):
+        """Play a sound in the user's browser."""
+        return await bci.play_sound(req.frequency, req.duration_ms, req.novel)
 
     return app

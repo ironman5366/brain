@@ -6,6 +6,7 @@ import { ImpedanceCheck } from "./components/impedance/ImpedanceCheck";
 import { BandPowerApp } from "./components/bandpower/BandPowerApp";
 import { FFTApp } from "./components/fft/FFTApp";
 import { ExperimentApp } from "./components/experiment/ExperimentApp";
+import { BCIApp } from "./components/bci/BCIApp";
 import { Dashboard } from "./components/Dashboard";
 import type { AppId } from "./components/Dashboard";
 
@@ -111,6 +112,7 @@ function App() {
         ))}
 
       {view === "experiment" && <ExperimentApp />}
+      {view === "bci" && <BCIApp />}
     </div>
   );
 }
