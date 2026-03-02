@@ -10,11 +10,12 @@ export function ConnectionStatus({ state }: Props) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: "1.5rem",
-        padding: "0.75rem 1rem",
-        borderBottom: "1px solid #333",
+        gap: "0.75rem",
+        padding: "0.5rem 1rem",
         fontFamily: "monospace",
-        fontSize: "0.85rem",
+        fontSize: "0.8rem",
+        flexWrap: "wrap",
+        overflow: "hidden",
       }}
     >
       <StatusDot
@@ -24,10 +25,10 @@ export function ConnectionStatus({ state }: Props) {
 
       {state.meta && (
         <>
-          <span style={{ color: "#aaa" }}>
+          <span style={{ color: "#aaa", whiteSpace: "nowrap" }}>
             {state.meta.samplingRate} Hz
           </span>
-          <span style={{ color: "#aaa" }}>
+          <span style={{ color: "#aaa", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
             {state.meta.channelNames.length}ch: {state.meta.channelNames.join(", ")}
           </span>
         </>

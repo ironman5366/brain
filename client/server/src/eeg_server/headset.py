@@ -52,3 +52,13 @@ class Headset(ABC):
         Keys: "good" (upper bound for good), "ok" (upper bound for acceptable).
         Anything above "ok" is bad.
         """
+
+    @property
+    def wire_colors(self) -> dict[str, str]:
+        """Map of channel name → physical wire color. Override per headset."""
+        return {}
+
+    @property
+    def pin_labels(self) -> dict[str, str]:
+        """Map of channel name → board pin label. Override per headset."""
+        return {}
