@@ -4,7 +4,7 @@ import { useNarrow } from "../hooks/useMediaQuery";
 import { SessionList } from "./sessions/SessionList";
 import { ReportView } from "./sessions/ReportView";
 
-export type AppId = "eeg" | "impedance" | "bandpower" | "fft" | "experiment" | "bci" | "calibration";
+export type AppId = "eeg" | "impedance" | "bandpower" | "fft" | "experiment" | "bci" | "calibration" | "ball";
 
 interface AppCard {
   id: AppId;
@@ -47,6 +47,11 @@ const APPS: AppCard[] = [
     id: "calibration",
     title: "Calibration",
     description: "Claude-guided headset setup",
+  },
+  {
+    id: "ball",
+    title: "Brain Ball",
+    description: "Move a ball with your mind",
   },
 ];
 

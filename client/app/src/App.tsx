@@ -8,6 +8,7 @@ import { FFTApp } from "./components/fft/FFTApp";
 import { ExperimentApp } from "./components/experiment/ExperimentApp";
 import { BCIApp } from "./components/bci/BCIApp";
 import { CalibrationApp } from "./components/calibration/CalibrationApp";
+import { BallApp } from "./components/ball/BallApp";
 import { Dashboard } from "./components/Dashboard";
 import type { AppId } from "./components/Dashboard";
 
@@ -116,6 +117,19 @@ function App() {
       {view === "experiment" && <ExperimentApp />}
       {view === "bci" && <BCIApp />}
       {view === "calibration" && <CalibrationApp />}
+
+      {view === "ball" &&
+        (state.connected && state.meta ? (
+          <BallApp />
+        ) : (
+          <Placeholder
+            text={
+              state.error
+                ? `Error: ${state.error}`
+                : "Waiting for connection..."
+            }
+          />
+        ))}
     </div>
   );
 }

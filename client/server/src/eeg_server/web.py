@@ -22,6 +22,7 @@ from .calibration import CalibrationController
 from .cyton import CYTON_WIRE_COLORS, CYTON_PIN_LABELS
 from .signal_quality import analyze_signal_quality
 from .session import SessionManager
+from .control import ControlSignalComputer
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,7 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     impedance_lock = threading.Lock()
     bci = BCIController()
     calibration = CalibrationController()
+    control = ControlSignalComputer()
 
     sessions_dir = Path(__file__).resolve().parent.parent.parent.parent / "sessions"
     session_mgr = SessionManager(sessions_dir, eeg_stream)
@@ -233,6 +235,26 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
             lambda: compute_band_powers(
                 eeg_stream.get_recent_data(num_samples),
                 eeg_stream.eeg_channels,
+                eeg_stream.sampling_rate,
+            ),
+        )
+        return result
+
+    @app.get("/api/control")
+    async def get_control_signals(window_sec: float = 1.0):
+        """Compute control signals (alpha asymmetry + concentration) for ball control."""
+        if not eeg_stream.is_running:
+            return {"error": "Board not streaming"}
+
+        num_samples = int(eeg_stream.sampling_rate * window_sec)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: control.update(
+                eeg_stream.get_recent_data(num_samples),
+                eeg_stream.eeg_channels,
+                eeg_stream.channel_names,
                 eeg_stream.sampling_rate,
             ),
         )
