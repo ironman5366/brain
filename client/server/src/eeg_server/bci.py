@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, iirnotch
 
 from .board import EEGStream
 from .session import SessionManager
@@ -36,7 +36,7 @@ class BCIController:
     session_id: str | None = None
     spelled: str = ""
 
-    _event_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    _subscribers: set[asyncio.Queue] = field(default_factory=set)
     _flash_done: asyncio.Event = field(default_factory=asyncio.Event)
     _flash_marker_count: int = 0
     _feedback_result: asyncio.Event = field(default_factory=asyncio.Event)
@@ -69,8 +69,18 @@ class BCIController:
         await self._push_event("flash", {"sequences": sequences})
         logger.info("BCI flash requested: %d sequences", sequences)
 
-        # Block until UI finishes
-        await self._flash_done.wait()
+        # Block until UI finishes, with timeout
+        try:
+            await asyncio.wait_for(self._flash_done.wait(), timeout=120)
+        except asyncio.TimeoutError:
+            self.state = "ready"
+            logger.warning("BCI flash timed out after 120s")
+            return {
+                "status": "timeout",
+                "error": "Browser did not respond within 120s. Is the BCI Speller page open?",
+                "connected_clients": len(self._subscribers),
+            }
+
         self.state = "ready"
 
         return {
@@ -97,8 +107,18 @@ class BCIController:
         await self._push_event("propose", {"letter": letter, "message": message})
         logger.info("BCI propose: %s", letter)
 
-        # Block until user responds
-        await self._feedback_result.wait()
+        # Block until user responds, with timeout
+        try:
+            await asyncio.wait_for(self._feedback_result.wait(), timeout=300)
+        except asyncio.TimeoutError:
+            self.state = "ready"
+            logger.warning("BCI propose timed out after 300s")
+            return {
+                "accepted": False,
+                "spelled": self.spelled,
+                "error": "User did not respond within 300s",
+            }
+
         accepted = self._feedback_value
 
         if accepted:
@@ -170,6 +190,7 @@ class BCIController:
             "spelled": self.spelled,
             "total_markers": marker_count,
             "flash_markers": flash_markers,
+            "connected_clients": len(self._subscribers),
         }
 
     def get_epochs(
@@ -177,10 +198,10 @@ class BCIController:
         session_mgr: SessionManager,
         eeg_stream: EEGStream,
         channels: list[str] | None = None,
-        window_start_ms: int = 250,
-        window_end_ms: int = 500,
+        window_start_ms: int = 200,
+        window_end_ms: int = 600,
         filter_low: float = 0.5,
-        filter_high: float = 30.0,
+        filter_high: float = 15.0,
         artifact_threshold_uv: float = 150.0,
     ) -> dict:
         """Extract epochs from live session data and compute row/col P300 scores."""
@@ -209,9 +230,13 @@ class BCIController:
         b, a = butter(4, [filter_low / nyq, filter_high / nyq], btype="band")
         eeg_filt = filtfilt(b, a, eeg, axis=1)
 
+        # 60Hz notch filter (narrow Q=30 to remove line noise without affecting signal)
+        b_notch, a_notch = iirnotch(60.0, 30.0, sr)
+        eeg_filt = filtfilt(b_notch, a_notch, eeg_filt, axis=1)
+
         # Extract epochs around p300_flash markers
-        pre_samples = int(0.1 * sr)  # 100ms pre-stimulus
-        post_samples = int(0.6 * sr)  # 600ms post-stimulus
+        pre_samples = int(0.2 * sr)  # 200ms pre-stimulus
+        post_samples = int(0.8 * sr)  # 800ms post-stimulus
         epoch_len = pre_samples + post_samples
         t0 = timestamps[0]
         n_samples = eeg_filt.shape[1]
@@ -382,16 +407,27 @@ class BCIController:
         }
 
     async def events(self):
-        """Async generator yielding SSE events for the UI."""
-        # Send current state on connect
-        yield self._format_sse("state", {"state": self.state, "session_id": self.session_id, "spelled": self.spelled})
+        """Async generator yielding SSE events for one SSE client."""
+        queue: asyncio.Queue = asyncio.Queue()
+        self._subscribers.add(queue)
+        try:
+            # Send current state on connect
+            yield self._format_sse("state", {
+                "state": self.state,
+                "session_id": self.session_id,
+                "spelled": self.spelled,
+            })
 
-        while True:
-            event = await self._event_queue.get()
-            yield event
+            while True:
+                event = await queue.get()
+                yield event
+        finally:
+            self._subscribers.discard(queue)
 
     async def _push_event(self, event_type: str, data: dict) -> None:
-        await self._event_queue.put(self._format_sse(event_type, data))
+        formatted = self._format_sse(event_type, data)
+        for queue in self._subscribers:
+            await queue.put(formatted)
 
     @staticmethod
     def _format_sse(event_type: str, data: dict) -> str:

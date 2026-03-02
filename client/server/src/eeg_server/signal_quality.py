@@ -39,12 +39,22 @@ def _analyze_channel(
 ) -> dict:
     issues: list[str] = []
 
-    # RMS noise level
-    rms_uv = float(np.sqrt(np.mean(ch_data**2)))
+    # Sanitize: replace NaN/inf with 0
+    ch_data = np.nan_to_num(ch_data, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # AC RMS noise level (std dev removes DC offset from half-cell potentials)
+    rms_uv = float(np.std(ch_data))
+
+    # Need enough samples for Welch
+    if len(ch_data) < 8:
+        return _empty_result(name)
 
     # Welch PSD for spectral analysis
     nperseg = min(len(ch_data), sr * 2)
     freqs, psd = welch(ch_data, fs=sr, nperseg=nperseg)
+
+    # Sanitize PSD output
+    psd = np.nan_to_num(psd, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Truncate to 0-60 Hz for visualization payload
     freq_mask = freqs <= 62  # slightly above 60 to include the bin
@@ -64,14 +74,14 @@ def _analyze_channel(
     # DC drift / low-frequency noise (< 1 Hz)
     dc_mask = freqs < 1.0
     dc_power = float(np.mean(psd[dc_mask])) if np.any(dc_mask) else 0.0
-    dc_drift_uv = float(np.sqrt(dc_power))
+    dc_drift_uv = float(np.sqrt(max(dc_power, 0.0)))
 
     # Alpha detection (8-13 Hz)
     alpha_mask = (freqs >= 8) & (freqs <= 13)
     total_mask = (freqs >= 1) & (freqs <= 45)
     alpha_power = float(np.sum(psd[alpha_mask])) if np.any(alpha_mask) else 0.0
-    total_power = float(np.sum(psd[total_mask])) if np.any(total_mask) else 1e-12
-    alpha_ratio = alpha_power / total_power
+    total_power = float(np.sum(psd[total_mask])) if np.any(total_mask) else 0.0
+    alpha_ratio = alpha_power / total_power if total_power > 1e-12 else 0.0
     has_alpha = alpha_ratio > 0.15
 
     # Classify issues
@@ -103,4 +113,20 @@ def _analyze_channel(
         "issues": issues,
         "psd_frequencies": [round(f, 2) for f in vis_freqs.tolist()],
         "psd_db": [round(v, 2) for v in vis_psd_db.tolist()],
+    }
+
+
+def _empty_result(name: str) -> dict:
+    """Return a stub result when there's not enough data to analyze."""
+    return {
+        "name": name,
+        "rms_uv": 0.0,
+        "line_noise_db": 0.0,
+        "dc_drift_uv": 0.0,
+        "has_alpha": False,
+        "alpha_power_ratio": 0.0,
+        "rating": "bad",
+        "issues": ["insufficient_data"],
+        "psd_frequencies": [],
+        "psd_db": [],
     }

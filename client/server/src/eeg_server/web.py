@@ -319,16 +319,16 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
                 logger.error("Impedance check error: %s", e)
                 yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
             finally:
-                # Resume normal EEG if we're on a real board
+                # Use synchronous calls in finally — await doesn't work
+                # reliably in an async generator's finally block when the
+                # client disconnects (Python async generator limitation).
                 if config.board_mode != BoardMode.SYNTHETIC:
                     try:
-                        await loop.run_in_executor(
-                            None, eeg_stream.board.stop_stream
-                        )
+                        eeg_stream.board.stop_stream()
                     except Exception:
                         pass
                     try:
-                        await loop.run_in_executor(None, eeg_stream.resume_stream)
+                        eeg_stream.resume_stream()
                     except Exception as e:
                         logger.error("Failed to resume stream: %s", e)
                 impedance_lock.release()

@@ -51,6 +51,12 @@ class ImpedanceChecker:
             )
             if callback:
                 callback(ch_idx, z)
+
+        # Reset all channels to default settings (gain=24x, etc.)
+        # The z commands can leave ADS1299 registers in a bad state.
+        self.board.config_board("d")
+        time.sleep(0.1)
+
         return results
 
     def _measure_channel(self, ch_idx: int) -> float:
