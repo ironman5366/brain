@@ -200,3 +200,16 @@ class EEGClassifierTrainer:
             "total": total,
             "accuracy": accuracy,
         }
+
+    @torch.no_grad()
+    def eval_batch(self, x, y) -> dict:
+        logits = self.classifier(x)
+        loss = self.criterion(logits, y)
+        predictions = logits.argmax(dim=-1)
+        num_correct = (predictions == y).sum().item()
+        total = y.shape[0]
+        return {
+            "loss": loss.item(),
+            "accuracy": num_correct / total,
+            "batch_size": total,
+        }

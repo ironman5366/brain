@@ -5,7 +5,13 @@ import sys
 import typing
 
 # Internal imports
-from data.dataset import MaskedEEGDataset, SparseDataset, SparseClassificationDataset
+from data.dataset import (
+    MaskedEEGDataset,
+    SparseDataset,
+    SparseClassificationDataset,
+    SparseAudioEmbedDataset,
+    DenseAudioEmbedDataset,
+)
 from models.et import EEGMAE, EEGMAEConfig, MAETrainer
 from models.classifiers import (
     EEGClassifier,
@@ -14,6 +20,9 @@ from models.classifiers import (
 )
 from models.eegnet import EEGNet, EEGNetConfig, EEGNetTrainer
 from models.nice_eeg import Enc_EEG, EncEEGConfig, EncEEGTrainer
+from models.audio_embed import EEGAudioEmbed, EEGAudioEmbedConfig, EEGAudioEmbedTrainer
+from models.audio_contrastive import EEGAudioContrastive, EEGAudioContrastiveConfig, EEGAudioContrastiveTrainer
+from models.audio_enigma import EEGAudioENIGMA, EEGAudioENIGMAConfig, EEGAudioENIGMATrainer
 from constants import DEFAULT_CHECKPOINT_DIR
 from settings import WANDB_ENTITY, WANDB_PROJECT
 
@@ -36,8 +45,15 @@ class Config(BaseModel):
         | typing.Literal["sparse_classification"]
         | typing.Literal["aj_preprocessed_classification"]
         | typing.Literal["things_eeg_classification"]
+        | typing.Literal["sparse_audio_embed"]
+        | typing.Literal["dense_audio_embed"]
     ) = "standard"
     class_col: str | None = None
+    audio_embeds_path: str | None = None
+
+    # Validation (optional)
+    val_data_path: str | None = None
+    val_audio_embeds_path: str | None = None
 
     # Model config
     arch: (
@@ -45,11 +61,17 @@ class Config(BaseModel):
         | typing.Literal["classifier"]
         | typing.Literal["eegnet"]
         | typing.Literal["nice_eeg"]
+        | typing.Literal["audio_embed"]
+        | typing.Literal["audio_contrastive"]
+        | typing.Literal["audio_enigma"]
     ) = "mae"
     mae: EEGMAEConfig | None = None
     classifier: EEGClassifierConfig | None = None
     eegnet: EEGNetConfig | None = None
     nice_eeg: EncEEGConfig | None = None
+    audio_embed: EEGAudioEmbedConfig | None = None
+    audio_contrastive: EEGAudioContrastiveConfig | None = None
+    audio_enigma: EEGAudioENIGMAConfig | None = None
 
     # Dataloading
     num_workers: int = 8
@@ -66,6 +88,53 @@ class Config(BaseModel):
     lr: float = 1e-3
     weight_decay: float = 1e-2
     lr_warmup_steps: int = 32
+
+
+@torch.no_grad()
+def run_validation(trainer, val_dataloader, config, accelerator, epoch, rank):
+    """Run validation pass and log metrics with val/ prefix."""
+    # Set model to eval mode
+    for attr in ("model", "mae", "classifier"):
+        if hasattr(trainer, attr):
+            getattr(trainer, attr).eval()
+            break
+
+    all_metrics: dict[str, list[float]] = {}
+    total_samples = 0
+
+    for batch in tqdm(val_dataloader, desc=f"Val epoch {epoch}", disable=(rank != 0)):
+        if config.arch == "mae":
+            metrics = trainer.eval_batch(batch)
+        elif config.arch in ("classifier", "eegnet", "nice_eeg"):
+            samples, classes = batch
+            metrics = trainer.eval_batch(samples, classes)
+        elif config.arch in ("audio_embed", "audio_contrastive", "audio_enigma"):
+            samples, audio_embeds = batch
+            metrics = trainer.eval_batch(samples, audio_embeds)
+        else:
+            raise ValueError(f"bad arch {config.arch}")
+
+        batch_size = metrics.pop("batch_size")
+        total_samples += batch_size
+
+        for k, v in metrics.items():
+            if k not in all_metrics:
+                all_metrics[k] = []
+            all_metrics[k].append(v * batch_size)
+
+    val_log = {}
+    for k, vals in all_metrics.items():
+        val_log[f"val/{k}"] = sum(vals) / total_samples
+
+    accelerator.log(val_log)
+
+    # Restore train mode
+    for attr in ("model", "mae", "classifier"):
+        if hasattr(trainer, attr):
+            getattr(trainer, attr).train(True)
+            break
+
+    return val_log
 
 
 def train(config: Config):
@@ -114,17 +183,75 @@ def train(config: Config):
         )
         dataset_kwargs["class_col"] = config.class_col
         dataset_class = ThingsEEGClassificationDataset
+    elif config.dataset == "sparse_audio_embed":
+        assert config.audio_embeds_path is not None, (
+            "need audio_embeds_path for sparse_audio_embed dataset"
+        )
+        dataset_class = SparseAudioEmbedDataset
+        dataset_kwargs["audio_embeds_path"] = config.audio_embeds_path
+    elif config.dataset == "dense_audio_embed":
+        assert config.audio_embeds_path is not None, (
+            "need audio_embeds_path for dense_audio_embed dataset"
+        )
+        dataset = DenseAudioEmbedDataset(
+            Path(config.data_path), config.audio_embeds_path
+        )
+        dataset_class = None
     else:
         raise ValueError(f"Unknown dataset {config.dataset}")
 
-    dataset = dataset_class(Path(config.data_path), **dataset_kwargs)
+    if dataset_class is not None:
+        dataset = dataset_class(Path(config.data_path), **dataset_kwargs)
     print(f"Using shuffle={config.shuffle}")
     dataloader = DataLoader(
         dataset=dataset,
         num_workers=config.num_workers,
         batch_size=config.batch_size,
         shuffle=config.shuffle,
+        drop_last=True,
     )
+
+    # Optional validation dataloader
+    val_dataloader = None
+    if config.val_data_path is not None:
+        if rank == 0:
+            print(f"Loading validation dataset from {config.val_data_path}...")
+        if config.dataset in ("sparse_audio_embed",):
+            assert config.val_audio_embeds_path is not None, (
+                "need val_audio_embeds_path for sparse_audio_embed val dataset"
+            )
+            val_dataset = SparseAudioEmbedDataset(
+                Path(config.val_data_path), config.val_audio_embeds_path
+            )
+        elif config.dataset in ("dense_audio_embed",):
+            assert config.val_audio_embeds_path is not None, (
+                "need val_audio_embeds_path for dense_audio_embed val dataset"
+            )
+            val_dataset = DenseAudioEmbedDataset(
+                Path(config.val_data_path), config.val_audio_embeds_path
+            )
+        elif config.dataset == "standard":
+            val_dataset = MaskedEEGDataset(Path(config.val_data_path))
+        elif config.dataset == "sparse":
+            val_dataset = SparseDataset(Path(config.val_data_path))
+        elif config.dataset == "sparse_classification":
+            val_dataset = SparseClassificationDataset(
+                Path(config.val_data_path), class_col=config.class_col
+            )
+        elif config.dataset == "things_eeg_classification":
+            from data.dataset import ThingsEEGClassificationDataset
+            val_dataset = ThingsEEGClassificationDataset(
+                Path(config.val_data_path), class_col=config.class_col
+            )
+        else:
+            raise ValueError(f"Validation not supported for dataset {config.dataset}")
+        val_dataloader = DataLoader(
+            dataset=val_dataset,
+            num_workers=config.num_workers,
+            batch_size=config.batch_size,
+            shuffle=False,
+            drop_last=False,
+        )
 
     if rank == 0:
         print(f"Loading {config.arch} model...")
@@ -140,6 +267,15 @@ def train(config: Config):
     elif config.arch == "nice_eeg":
         assert config.nice_eeg is not None, "need EncEEG config to train nice_eeg"
         model = Enc_EEG.from_config(config.nice_eeg)
+    elif config.arch == "audio_embed":
+        assert config.audio_embed is not None, "need audio_embed config"
+        model = EEGAudioEmbed.from_config(config.audio_embed)
+    elif config.arch == "audio_contrastive":
+        assert config.audio_contrastive is not None, "need audio_contrastive config"
+        model = EEGAudioContrastive.from_config(config.audio_contrastive)
+    elif config.arch == "audio_enigma":
+        assert config.audio_enigma is not None, "need audio_enigma config"
+        model = EEGAudioENIGMA.from_config(config.audio_enigma)
     else:
         raise ValueError(f"Unknown arch {config.arch}")
 
@@ -157,9 +293,14 @@ def train(config: Config):
 
     if rank == 0:
         print("Accelerate prepare...")
-    model, optimizer, scheduler, dataloader = accelerator.prepare(
-        model, optimizer, scheduler, dataloader
-    )
+    if val_dataloader is not None:
+        model, optimizer, scheduler, dataloader, val_dataloader = accelerator.prepare(
+            model, optimizer, scheduler, dataloader, val_dataloader
+        )
+    else:
+        model, optimizer, scheduler, dataloader = accelerator.prepare(
+            model, optimizer, scheduler, dataloader
+        )
 
     if config.arch == "mae":
         trainer = MAETrainer(
@@ -185,6 +326,35 @@ def train(config: Config):
             accelerator=accelerator,
             scheduler=scheduler,
             optimizer=optimizer,
+        )
+    elif config.arch == "audio_embed":
+        trainer = EEGAudioEmbedTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
+    elif config.arch == "audio_contrastive":
+        trainer = EEGAudioContrastiveTrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+            contrastive_weight=config.audio_contrastive.contrastive_weight,
+            mse_weight=config.audio_contrastive.mse_weight,
+            variance_weight=config.audio_contrastive.variance_weight,
+            covariance_weight=config.audio_contrastive.covariance_weight,
+            variance_target=config.audio_contrastive.variance_target,
+        )
+    elif config.arch == "audio_enigma":
+        trainer = EEGAudioENIGMATrainer(
+            model=model,
+            accelerator=accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+            mse_weight=config.audio_enigma.mse_weight,
+            contrastive_weight=config.audio_enigma.contrastive_weight,
+            max_grad_norm=config.audio_enigma.max_grad_norm,
         )
     else:
         raise ValueError(f"Unknown arch {config.arch}")
@@ -212,6 +382,15 @@ def train(config: Config):
             elif config.arch == "nice_eeg":
                 samples, classes = batch
                 l = trainer.step(samples, classes)
+            elif config.arch == "audio_embed":
+                samples, audio_embeds = batch
+                l = trainer.step(samples, audio_embeds)
+            elif config.arch == "audio_contrastive":
+                samples, audio_embeds = batch
+                l = trainer.step(samples, audio_embeds)
+            elif config.arch == "audio_enigma":
+                samples, audio_embeds = batch
+                l = trainer.step(samples, audio_embeds)
             else:
                 raise ValueError(f"bad arch {config.arch}")
 
@@ -221,8 +400,12 @@ def train(config: Config):
                         print(
                             f"Loss: {l['loss'].item():.3f} | Accuracy: {l['accuracy'] * 100:.2f}% ({l['num_correct']}/{l['total']})"
                         )
+                    elif config.arch in ("audio_contrastive", "audio_enigma"):
+                        loss_val = l['loss'].item() if hasattr(l['loss'], 'item') else l['loss']
+                        print(f"Loss: {loss_val:.3f} | Top-1: {l['top1_acc'] * 100:.1f}%")
                     else:
-                        print(f"Loss: {l['loss']:.3f}")
+                        loss_val = l['loss'].item() if hasattr(l['loss'], 'item') else l['loss']
+                        print(f"Loss: {loss_val:.3f}")
             i += 1
 
         checkpoint_dir = Path(config.checkpoint_dir) / config.name / f"epoch_{epoch}"
@@ -231,6 +414,14 @@ def train(config: Config):
             print(f"Checkpointing to {checkpoint_dir}...")
         _model = accelerator.unwrap_model(model)
         _model.save_pretrained(checkpoint_dir)
+
+        if val_dataloader is not None:
+            val_metrics = run_validation(
+                trainer, val_dataloader, config, accelerator, epoch, rank
+            )
+            if rank == 0:
+                parts = [f"{k}: {v:.4f}" for k, v in val_metrics.items()]
+                print(f"  Validation: {' | '.join(parts)}")
 
         accelerator.wait_for_everyone()
 

@@ -110,6 +110,44 @@ def mne_to_tensor(
     return data, mask
 
 
+def map_egi_to_32ch(
+    epoch_data: torch.Tensor,
+    mapping: dict[str, list[tuple[int, float]]],
+    target_channels: list[str],
+    normalization: str = "epoch",
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Map NMED EGI 125-channel data to 32-channel layout via IDW spatial interpolation.
+
+    Args:
+        epoch_data: (n_epochs, 125, n_times) raw NMED EGI data
+        mapping: Dict from target channel name to list of (egi_row_index, weight)
+        target_channels: Ordered list of 32 target channel names
+        normalization: "epoch" or "none"
+        eps: Numerical stability constant
+
+    Returns:
+        (n_epochs, 32, n_times) tensor mapped to 32 target channels
+    """
+    n_epochs, _, n_times = epoch_data.shape
+    n_targets = len(target_channels)
+    result = torch.zeros((n_epochs, n_targets, n_times), dtype=torch.float32)
+
+    for t_idx, t_name in enumerate(target_channels):
+        contributors = mapping[t_name]
+        for egi_row, weight in contributors:
+            result[:, t_idx, :] += weight * epoch_data[:, egi_row, :]
+
+    if normalization == "epoch":
+        mean = result.mean(dim=-1, keepdim=True)
+        std = result.std(dim=-1, keepdim=True)
+        result = (result - mean) / (std + eps)
+    elif normalization != "none":
+        raise ValueError(f"Unknown normalization: {normalization}")
+
+    return result
+
+
 def standardize_epochs(
     epoch_data: torch.Tensor,
     ch_names: list[str],
