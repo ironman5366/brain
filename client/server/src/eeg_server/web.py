@@ -13,6 +13,7 @@ from pylsl import StreamInlet, resolve_byprop
 
 from .bandpower import compute_band_powers
 from .spectrum import compute_spectrum
+from .ball import BallController
 from .board import EEGStream
 from .config import BoardMode, ServerConfig
 from .cyton import CytonHeadset
@@ -22,6 +23,7 @@ from .calibration import CalibrationController
 from .cyton import CYTON_WIRE_COLORS, CYTON_PIN_LABELS
 from .signal_quality import analyze_signal_quality
 from .session import SessionManager
+from .control import ControlSignalComputer
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,10 @@ class WebSocketBridge:
                 await asyncio.sleep(0.1)
 
 
+class NavigateRequest(BaseModel):
+    view: str
+
+
 class StartSessionRequest(BaseModel):
     protocol_id: str
     protocol_version: str = "1.0.0"
@@ -182,15 +188,38 @@ class PlaySoundRequest(BaseModel):
     novel: bool = False
 
 
+class TargetRequest(BaseModel):
+    x: float | None = None
+    y: float | None = None
+
+
+class CalibrateRequest(BaseModel):
+    session_id: str
+
+
 def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     app = FastAPI(title="EEG Server")
     bridge = WebSocketBridge(config, eeg_stream)
     impedance_lock = threading.Lock()
-    bci = BCIController()
-    calibration = CalibrationController()
-
     sessions_dir = Path(__file__).resolve().parent.parent.parent.parent / "sessions"
     session_mgr = SessionManager(sessions_dir, eeg_stream)
+
+    bci = BCIController()
+    bci.load_classifier(sessions_dir)
+    calibration = CalibrationController()
+    control = ControlSignalComputer()
+    ball = BallController()
+
+    # --- Navigation (agent-driven UI routing) ---
+    _nav_subscribers: set[asyncio.Queue] = set()
+    _nav_current_view = "dashboard"
+
+    VALID_VIEWS = {"dashboard", "eeg", "impedance", "bandpower", "fft", "experiment", "bci", "calibration", "ball", "asymmetry"}
+
+    async def _nav_broadcast(view: str) -> None:
+        msg = f"data: {json.dumps({'type': 'navigate', 'view': view})}\n\n"
+        for q in list(_nav_subscribers):
+            q.put_nowait(msg)
 
     app.add_middleware(
         CORSMiddleware,
@@ -202,9 +231,28 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     @app.on_event("startup")
     async def startup():
         await bridge.start()
+        async def ball_loop():
+            delay = 1.0 / ball.tick_hz
+            while True:
+                try:
+                    await ball.tick(eeg_stream, control)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error("Ball loop error: %s", e)
+                await asyncio.sleep(delay)
+
+        app.state.ball_task = asyncio.create_task(ball_loop())
 
     @app.on_event("shutdown")
     async def shutdown():
+        ball_task = getattr(app.state, "ball_task", None)
+        if ball_task is not None:
+            ball_task.cancel()
+            try:
+                await ball_task
+            except asyncio.CancelledError:
+                pass
         await bridge.stop()
 
     @app.get("/api/status")
@@ -233,6 +281,33 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
             lambda: compute_band_powers(
                 eeg_stream.get_recent_data(num_samples),
                 eeg_stream.eeg_channels,
+                eeg_stream.sampling_rate,
+            ),
+        )
+        return result
+
+    @app.get("/api/control")
+    async def get_control_signals(window_sec: float = 1.0):
+        """Compute control signals (alpha asymmetry + concentration) for ball control."""
+        if not eeg_stream.is_running:
+            return {"error": "Board not streaming"}
+
+        ball_status_payload = ball.status()
+        if (
+            ball_status_payload["state"] == "running"
+            and ball_status_payload["control"] is not None
+        ):
+            return ball_status_payload["control"]
+
+        num_samples = int(eeg_stream.sampling_rate * window_sec)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: control.update(
+                eeg_stream.get_recent_data(num_samples),
+                eeg_stream.eeg_channels,
+                eeg_stream.channel_names,
                 eeg_stream.sampling_rate,
             ),
         )
@@ -347,6 +422,48 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
         finally:
             bridge.remove_client(websocket)
 
+    # --- Navigation Endpoints ---
+
+    @app.get("/api/nav/events")
+    async def nav_events():
+        """SSE stream for agent-driven UI navigation."""
+        async def generate():
+            nonlocal _nav_current_view
+            queue: asyncio.Queue = asyncio.Queue()
+            _nav_subscribers.add(queue)
+            try:
+                yield f"data: {json.dumps({'type': 'state', 'view': _nav_current_view})}\n\n"
+                while True:
+                    yield await queue.get()
+            finally:
+                _nav_subscribers.discard(queue)
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    @app.post("/api/nav/goto")
+    async def nav_goto(req: NavigateRequest):
+        """Navigate the browser UI to a specific view."""
+        nonlocal _nav_current_view
+        if req.view not in VALID_VIEWS:
+            raise HTTPException(400, f"Unknown view: {req.view}. Valid: {sorted(VALID_VIEWS)}")
+        _nav_current_view = req.view
+        await _nav_broadcast(req.view)
+        return {"ok": True, "view": req.view}
+
+    # --- Asymmetry Check Endpoints ---
+
+    _asymmetry_instruction = ""
+
+    @app.post("/api/asymmetry/instruction")
+    async def set_asymmetry_instruction(req: MessageRequest):
+        nonlocal _asymmetry_instruction
+        _asymmetry_instruction = req.text
+        return {"ok": True}
+
+    @app.get("/api/asymmetry/instruction")
+    async def get_asymmetry_instruction():
+        return {"text": _asymmetry_instruction}
+
     # --- Session / Experiment Endpoints ---
 
     @app.post("/api/session/start")
@@ -436,12 +553,16 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     @app.post("/api/bci/start")
     async def bci_start():
         """Start a BCI speller session."""
+        nonlocal _nav_current_view
         if not eeg_stream.is_running:
             raise HTTPException(400, "Board not streaming")
         try:
-            return await bci.start(session_mgr)
+            result = await bci.start(session_mgr)
         except RuntimeError as e:
             raise HTTPException(409, str(e))
+        _nav_current_view = "bci"
+        await _nav_broadcast("bci")
+        return result
 
     @app.post("/api/bci/stop")
     async def bci_stop():
@@ -531,6 +652,67 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     async def bci_play_sound(req: PlaySoundRequest):
         """Play a sound in the user's browser."""
         return await bci.play_sound(req.frequency, req.duration_ms, req.novel)
+
+    # --- Ball Control Endpoints ---
+
+    @app.get("/api/ball/events")
+    async def ball_events():
+        """SSE stream for the ball-control UI."""
+        return StreamingResponse(ball.events(), media_type="text/event-stream")
+
+    @app.get("/api/ball/status")
+    async def ball_status():
+        """Current server-owned ball state and latest control snapshot."""
+        return ball.status()
+
+    @app.post("/api/ball/start")
+    async def ball_start():
+        """Start an agent-driven ball-control run."""
+        nonlocal _nav_current_view
+        if not eeg_stream.is_running:
+            raise HTTPException(400, "Board not streaming")
+        try:
+            result = await ball.start(session_mgr, control)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        _nav_current_view = "ball"
+        await _nav_broadcast("ball")
+        return result
+
+    @app.post("/api/ball/stop")
+    async def ball_stop():
+        """Stop the active ball-control run and save EEG data."""
+        try:
+            return await ball.stop(session_mgr)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/api/ball/reset")
+    async def ball_reset():
+        """Recenter the ball and reset control normalization."""
+        return await ball.reset(control)
+
+    @app.post("/api/ball/target")
+    async def ball_target(req: TargetRequest):
+        """Set or clear a target position on the ball canvas."""
+        return await ball.set_target(req.x, req.y)
+
+    @app.post("/api/ball/message")
+    async def ball_message(req: MessageRequest):
+        """Show a message in the ball-control UI."""
+        return await ball.send_message(req.text)
+
+    @app.post("/api/bci/calibrate")
+    async def bci_calibrate(req: CalibrateRequest):
+        """Train P300 classifier from a completed copy-spelling session."""
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(
+                None,
+                lambda: bci.calibrate(session_mgr, eeg_stream, req.session_id),
+            )
+        except (RuntimeError, FileNotFoundError) as e:
+            raise HTTPException(400, str(e))
 
     # --- Calibration Endpoints ---
 
@@ -661,7 +843,7 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
 
     @app.post("/api/calibration/message")
     async def calibration_message(req: MessageRequest):
-        """Show a message from Claude in the calibration UI."""
+        """Show a message from the agent in the calibration UI."""
         return await calibration.send_message(req.text)
 
     @app.get("/api/calibration/status")

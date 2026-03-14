@@ -1,6 +1,6 @@
 /**
  * Shared P300 flash schedule logic — used by both useExperiment (copy spelling)
- * and useBCI (free spelling controlled by Claude).
+ * and useBCI (free spelling controlled by an agent).
  */
 
 import type { P300Generator } from "./experiment.types";

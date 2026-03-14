@@ -1,4 +1,4 @@
-"""Calibration controller — manages Claude-driven headset calibration sessions."""
+"""Calibration controller — manages agent-driven headset calibration sessions."""
 
 import asyncio
 import json
@@ -13,12 +13,12 @@ MAX_MESSAGES = 50
 @dataclass
 class CalibrationController:
     """
-    Server-side controller for Claude-driven EEG calibration.
+    Server-side controller for agent-driven EEG calibration.
 
-    Claude calls non-blocking MCP tools. This controller:
+    An external agent calls non-blocking tools. This controller:
     - Caches the latest impedance and signal quality results
     - Pushes events to the calibration UI via SSE
-    - Maintains a message history of Claude's instructions
+    - Maintains a message history of agent instructions
 
     Uses a subscriber set so multiple SSE clients each get every event.
     """
@@ -43,7 +43,7 @@ class CalibrationController:
             self._subscribers.discard(queue)
 
     async def send_message(self, text: str) -> dict:
-        """Push a message from Claude to display in the UI."""
+        """Push a message from the agent to display in the UI."""
         self._messages.append(text)
         if len(self._messages) > MAX_MESSAGES:
             self._messages = self._messages[-MAX_MESSAGES:]

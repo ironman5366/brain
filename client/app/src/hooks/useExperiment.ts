@@ -2,16 +2,13 @@ import { useState, useCallback, useRef } from "react";
 import type {
   Protocol,
   ExperimentPhase,
-  StimulusDef,
   TrialDef,
   SSVEPGenerator,
-  SSVEPFrequency,
   P300Generator,
   OddballGenerator,
 } from "../lib/experiment.types";
 import { MarkerSender } from "../lib/markers";
 import { buildP300Schedule } from "../lib/p300";
-import type { FlashEvent, P300CharSchedule } from "../lib/p300";
 
 const API_BASE = "http://localhost:8765";
 

@@ -201,6 +201,7 @@ export interface StopSessionResponse {
 export interface EventMarker {
   code: string;
   timestamp: number; // performance.now() from frontend
+  client_time_ms?: number; // Unix epoch in ms from performance.timeOrigin
   block_id?: string;
   trial_index?: number;
   metadata?: Record<string, unknown>;

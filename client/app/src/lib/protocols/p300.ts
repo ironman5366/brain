@@ -13,8 +13,8 @@ export const P300_PROTOCOL: Protocol = {
   id: "p300-speller-v1",
   name: "P300 Speller",
   description:
-    "Copy-spelling P300 BCI. Attend to the highlighted target letter " +
-    "while rows and columns flash. 3 characters, ~2 min.",
+    "Copy-spelling P300 BCI calibration. Attend to the highlighted target letter " +
+    "while rows and columns flash. 15 characters, ~8 min.",
   version: "1.0.0",
   blocks: [
     {
@@ -28,7 +28,7 @@ export const P300_PROTOCOL: Protocol = {
       trialGenerator: {
         type: "p300",
         matrix: P300_MATRIX,
-        targetLetters: ["B", "R", "N"],
+        targetLetters: ["B", "E", "H", "I", "L", "N", "O", "R", "S", "T", "U", "D", "G", "Y", "4"],
         flashDurationMs: 100,
         isiMs: 75,
         sequencesPerCharacter: 10,

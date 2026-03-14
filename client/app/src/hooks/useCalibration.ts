@@ -17,7 +17,7 @@ export function useCalibration() {
   const [impedanceRunning, setImpedanceRunning] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // --- SSE: subscribe to calibration events from Claude ---
+  // --- SSE: subscribe to calibration events from the agent ---
   useEffect(() => {
     const es = new EventSource(`${API_BASE}/api/calibration/events`);
 

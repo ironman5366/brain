@@ -84,10 +84,10 @@ function IdleView() {
       fontFamily: "monospace",
     }}>
       <span style={{ fontSize: "1.2rem", color: "#666" }}>
-        Waiting for Claude to start...
+        Waiting for an agent to start...
       </span>
       <span style={{ fontSize: "0.8rem", color: "#444" }}>
-        Open the BCI page, then tell Claude you're ready.
+        Open the BCI page, then tell the agent you're ready.
       </span>
     </div>
   );
@@ -133,7 +133,7 @@ function ProposalView({
       fontFamily: "monospace",
     }}>
       <span style={{ fontSize: "0.9rem", color: "#888" }}>
-        Claude proposes:
+        Agent proposes:
       </span>
       <span style={{
         fontSize: "5rem",
@@ -155,10 +155,10 @@ function ProposalView({
         </span>
       )}
       <div style={{ display: "flex", gap: "1rem", marginTop: "0.5rem" }}>
-        <button onClick={onAccept} style={buttonStyle("#2d5a2d", "#3a7a3a")}>
+        <button onClick={onAccept} style={buttonStyle("#2d5a2d")}>
           Accept
         </button>
-        <button onClick={onReject} style={buttonStyle("#5a2d2d", "#7a3a3a")}>
+        <button onClick={onReject} style={buttonStyle("#5a2d2d")}>
           Reject
         </button>
       </div>
@@ -314,7 +314,7 @@ function modeLabel(mode: string): string {
   }
 }
 
-function buttonStyle(bg: string, hover: string): React.CSSProperties {
+function buttonStyle(bg: string): React.CSSProperties {
   return {
     padding: "0.75rem 2rem",
     fontFamily: "monospace",
