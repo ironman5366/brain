@@ -1,7 +1,6 @@
 import { useRef, useEffect, useCallback } from "react";
 import { useSpectrum } from "../../hooks/useSpectrum";
-import { BAND_COLORS, BAND_NAMES } from "../../lib/bandpower";
-import type { SpectrumResponse } from "../../lib/spectrum";
+import { BAND_COLORS } from "../../lib/bandpower";
 
 const MAX_FREQ = 60; // Hz — covers all EEG bands
 const PADDING = { top: 20, right: 16, bottom: 28, left: 56 };

@@ -1,6 +1,6 @@
-"""MCP server for Claude to control the BCI speller.
+"""MCP server for an external agent to drive EEG paradigms.
 
-Thin wrapper around the FastAPI BCI endpoints. Each tool makes an HTTP call
+Thin wrapper around the FastAPI endpoints. Each tool makes an HTTP call
 to the running EEG server and returns the JSON response.
 
 Usage:
@@ -40,6 +40,21 @@ def _sync_post_blocking(path: str, body: dict | None = None, timeout: float = 30
         r = c.post(path, json=body or {})
         r.raise_for_status()
         return json.dumps(r.json(), indent=2)
+
+
+@mcp.tool()
+def navigate(view: str) -> str:
+    """Navigate the browser UI to a specific app or back to the dashboard.
+
+    Use this before starting interactions that require a specific UI,
+    or to switch views during a session. Note: bci_start() and ball_start()
+    auto-navigate to their respective views.
+
+    Args:
+        view: One of: dashboard, eeg, impedance, bandpower, fft, experiment,
+              bci, calibration, ball.
+    """
+    return _sync_post("/api/nav/goto", {"view": view})
 
 
 @mcp.tool()
@@ -192,6 +207,26 @@ def bci_stop() -> str:
     return _sync_post("/api/bci/stop")
 
 
+@mcp.tool()
+def bci_calibrate(session_id: str) -> str:
+    """Train a P300 classifier from a completed copy-spelling calibration session.
+
+    The session must be a copy-spelling session (protocol "p300-speller-v1") with
+    labeled p300_flash markers containing is_target metadata. Run the copy-spelling
+    protocol from the Experiments page first to collect calibration data.
+
+    After calibration, the classifier is automatically used by bci_epochs for
+    letter prediction, replacing simple amplitude averaging with trained
+    EEGNet-based classification.
+
+    Training takes 10-30 seconds. Returns training metrics (accuracy, AUC).
+
+    Args:
+        session_id: The session_id of a completed copy-spelling session.
+    """
+    return _sync_post_blocking("/api/bci/calibrate", {"session_id": session_id}, timeout=120)
+
+
 # --- Calibration Tools ---
 
 
@@ -263,6 +298,66 @@ def calibration_status() -> str:
     and the last few messages sent to the user.
     """
     return _sync_get("/api/calibration/status")
+
+
+# --- Ball Control Tools ---
+
+
+@mcp.tool()
+def asymmetry_instruction(text: str) -> str:
+    """Set the instruction text shown in the Asymmetry Check UI.
+
+    Use this to tell the user what to do, e.g. "Look LEFT" or "Look RIGHT".
+
+    Args:
+        text: The instruction text to display.
+    """
+    return _sync_post("/api/asymmetry/instruction", {"text": text})
+
+
+@mcp.tool()
+def ball_start() -> str:
+    """Start a server-owned brain-ball control run."""
+    return _sync_post("/api/ball/start")
+
+
+@mcp.tool()
+def ball_status() -> str:
+    """Get the current ball position, latest control signal, and session state."""
+    return _sync_get("/api/ball/status")
+
+
+@mcp.tool()
+def ball_reset() -> str:
+    """Recenter the ball and reset control normalization."""
+    return _sync_post("/api/ball/reset")
+
+
+@mcp.tool()
+def ball_target(x: float | None = None, y: float | None = None) -> str:
+    """Set or clear a target on the ball canvas.
+
+    Places a visible target marker for the user to aim the ball at.
+    Coordinates are normalized 0-1 (0,0 = top-left, 1,1 = bottom-right).
+    Call with no arguments to clear the target.
+
+    Args:
+        x: Target X position (0-1). Omit to clear.
+        y: Target Y position (0-1). Omit to clear.
+    """
+    return _sync_post("/api/ball/target", {"x": x, "y": y})
+
+
+@mcp.tool()
+def ball_message(text: str) -> str:
+    """Show a message to the user in the ball UI."""
+    return _sync_post("/api/ball/message", {"text": text})
+
+
+@mcp.tool()
+def ball_stop() -> str:
+    """Stop the active brain-ball run and save EEG data."""
+    return _sync_post("/api/ball/stop")
 
 
 if __name__ == "__main__":

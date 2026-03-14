@@ -12,7 +12,14 @@ export interface ControlSignalResponse {
   update_count: number;
   per_channel: Record<
     string,
-    { alpha: number; beta: number; rejected: boolean }
+    {
+      alpha: number;
+      beta: number;
+      rejected: boolean;
+      issues?: string[];
+      rms_uv?: number;
+      line_noise_db?: number;
+    }
   >;
   error?: string;
 }

@@ -20,7 +20,11 @@ export class MarkerSender {
 
   /** Record a marker. Safe to call from rAF callbacks. */
   send(marker: EventMarker): void {
-    this.buffer.push(marker);
+    this.buffer.push({
+      ...marker,
+      client_time_ms:
+        marker.client_time_ms ?? performance.timeOrigin + marker.timestamp,
+    });
     if (this.buffer.length >= FLUSH_BATCH_SIZE) {
       this.flush();
     }

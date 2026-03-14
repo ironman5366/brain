@@ -26,6 +26,11 @@ Session reports live at `sessions/{id}/report.md` and are served via the API. Re
 
 The `--report` flag on analysis scripts generates a baseline report with data tables. Claude should then expand it with interpretation, context from relevant literature, and actionable conclusions. Keep it rigorous but readable.
 
+### Calibration protocol
+After any reset (server restart, board power cycle, moving rooms, re-seating the headset), always run calibration before starting experiments or the ball. The calibration flow is: navigate to calibration view → check signal quality → report results → address any issues → then proceed.
+
+Before starting any timed trial (target practice, flash sequences, etc.), always get the user's confirmation that they are ready. Don't just start a countdown.
+
 ### Server-first logic and debugging
 Claude can't see the UI. So:
 - **Business logic lives in Python**, not in the frontend. The React client should be a thin display layer over server APIs.

@@ -7,6 +7,8 @@ Computes two control signals from EEG:
 Uses adaptive normalization (running EMA of mean + std) so no explicit calibration needed.
 """
 
+import threading
+
 import numpy as np
 from scipy.signal import welch
 
@@ -17,6 +19,11 @@ CONCENTRATION_CHANNELS = ("C3", "C4", "P7", "P8")
 
 ALPHA_BAND = (8.0, 13.0)
 BETA_BAND = (13.0, 30.0)
+LINE_NOISE_BAND_HZ = 60.0
+MIN_RMS_UV = 2.0
+MAX_RMS_UV = 500.0
+MAX_LINE_NOISE_DB = 40.0
+MAX_DC_DRIFT_UV = 200.0
 
 class ControlSignalComputer:
     """Stateful controller that maintains adaptive normalization."""
@@ -24,23 +31,44 @@ class ControlSignalComputer:
     def __init__(self, smooth_alpha: float = 0.3, norm_alpha: float = 0.05):
         self._smooth_alpha = smooth_alpha
         self._norm_alpha = norm_alpha
-        self._update_count = 0
+        self._lock = threading.Lock()
+        self.reset()
 
-        # Smoothed output values
-        self._smooth_asym = 0.0
-        self._smooth_conc = 0.5
+    def reset(self) -> None:
+        """Reset adaptive normalization and smoothed outputs."""
+        with self._lock:
+            self._update_count = 0
 
-        # Running stats for adaptive normalization
-        self._asym_mean = 0.0
-        self._asym_var = 0.01
-        self._conc_mean = 1.0
-        self._conc_var = 0.1
+            # Smoothed output values
+            self._smooth_asym = 0.0
+            self._smooth_conc = 0.5
 
-        # Last good values for artifact hold
-        self._last_asym = 0.0
-        self._last_conc = 0.5
+            # Running stats for adaptive normalization
+            self._asym_mean = 0.0
+            self._asym_var = 0.01
+            self._conc_mean = 1.0
+            self._conc_var = 0.1
+
+            # Last good values for artifact hold
+            self._last_asym = 0.0
+            self._last_conc = 0.5
 
     def update(
+        self,
+        data: np.ndarray,
+        eeg_channels: list[int],
+        channel_names: list[str],
+        sampling_rate: int,
+    ) -> dict:
+        with self._lock:
+            return self._update_locked(
+                data,
+                eeg_channels,
+                channel_names,
+                sampling_rate,
+            )
+
+    def _update_locked(
         self,
         data: np.ndarray,
         eeg_channels: list[int],
@@ -101,6 +129,9 @@ class ControlSignalComputer:
                     "alpha": round(p["alpha"], 2),
                     "beta": round(p["beta"], 2),
                     "rejected": p["rejected"],
+                    "issues": p["issues"],
+                    "rms_uv": round(p["rms_uv"], 1),
+                    "line_noise_db": round(p["line_noise_db"], 1),
                 }
                 for name, p in channel_powers.items()
             },
@@ -120,6 +151,9 @@ class ControlSignalComputer:
                     "alpha": round(p["alpha"], 2),
                     "beta": round(p["beta"], 2),
                     "rejected": p["rejected"],
+                    "issues": p["issues"],
+                    "rms_uv": round(p["rms_uv"], 1),
+                    "line_noise_db": round(p["line_noise_db"], 1),
                 }
                 for name, p in channel_powers.items()
             }
@@ -142,9 +176,17 @@ def _compute_channel_powers(
         ch_data = np.nan_to_num(ch_data, nan=0.0, posinf=0.0, neginf=0.0)
 
         if len(ch_data) < 8:
-            results[name] = {"alpha": 0.0, "beta": 0.0, "rejected": True}
+            results[name] = {
+                "alpha": 0.0,
+                "beta": 0.0,
+                "rejected": True,
+                "issues": ["insufficient_data"],
+                "rms_uv": 0.0,
+                "line_noise_db": 0.0,
+            }
             continue
 
+        rms_uv = float(np.std(ch_data))
         nperseg = min(len(ch_data), sampling_rate * 2)
         freqs, psd = welch(ch_data, fs=sampling_rate, nperseg=nperseg)
         psd = np.nan_to_num(psd, nan=0.0, posinf=0.0, neginf=0.0)
@@ -155,10 +197,37 @@ def _compute_channel_powers(
         alpha_power = float(np.sum(psd[alpha_mask])) if np.any(alpha_mask) else 0.0
         beta_power = float(np.sum(psd[beta_mask])) if np.any(beta_mask) else 0.0
 
+        line_mask = np.abs(freqs - LINE_NOISE_BAND_HZ) < 2.0
+        broadband_mask = (freqs >= 5.0) & (freqs <= 45.0)
+        line_power = float(np.mean(psd[line_mask])) if np.any(line_mask) else 0.0
+        broadband_power = float(np.mean(psd[broadband_mask])) if np.any(broadband_mask) else 1e-12
+        line_noise_db = float(
+            10.0 * np.log10(max(line_power, 1e-12) / max(broadband_power, 1e-12))
+        )
+
+        dc_mask = freqs < 1.0
+        dc_power = float(np.mean(psd[dc_mask])) if np.any(dc_mask) else 0.0
+        dc_drift_uv = float(np.sqrt(max(dc_power, 0.0)))
+
+        issues: list[str] = []
+        if rms_uv < MIN_RMS_UV:
+            issues.append("flat_signal")
+        elif rms_uv > MAX_RMS_UV:
+            issues.append("high_noise")
+        if line_noise_db > MAX_LINE_NOISE_DB:
+            issues.append("high_line_noise")
+        if dc_drift_uv > MAX_DC_DRIFT_UV:
+            issues.append("dc_drift")
+
+        rejected = bool(issues)
+
         results[name] = {
             "alpha": alpha_power,
             "beta": beta_power,
-            "rejected": False,
+            "rejected": rejected,
+            "issues": issues,
+            "rms_uv": rms_uv,
+            "line_noise_db": line_noise_db,
         }
 
     return results

@@ -1,52 +1,19 @@
-import { useRef, useEffect, useCallback } from "react";
-import {
-  useControlSignal,
-  type ControlSignalResponse,
-} from "../../hooks/useControlSignal";
+import { useEffect, useRef } from "react";
+import { useBall } from "../../hooks/useBall";
+import type { ControlSignalResponse } from "../../hooks/useControlSignal";
 
 const BALL_RADIUS = 14;
-const TRAIL_LENGTH = 30;
-const MAX_SPEED = 300; // pixels per second
-const LERP_FACTOR = 0.08; // client-side smoothing between server updates
-const GLOW_COLOR = "rgba(124, 111, 224, "; // #7c6fe0 with alpha
+const GLOW_COLOR = "rgba(124, 111, 224, ";
 const BALL_COLOR = "#9d93e8";
 
-interface BallState {
-  x: number;
-  y: number;
-  targetVx: number;
-  targetVy: number;
-  smoothVx: number;
-  smoothVy: number;
-  trail: { x: number; y: number }[];
-}
-
 export function BallApp() {
-  const { data, error } = useControlSignal();
+  const { state, error } = useBall();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const ballRef = useRef<BallState | null>(null);
-  const dataRef = useRef<ControlSignalResponse | null>(null);
+  const stateRef = useRef(state);
   const rafRef = useRef<number>(0);
-  const prevTimeRef = useRef<number>(0);
+  stateRef.current = state;
 
-  // Keep dataRef in sync without triggering re-renders
-  dataRef.current = data;
-
-  // Initialize ball state centered in canvas
-  const initBall = useCallback((w: number, h: number): BallState => {
-    return {
-      x: w / 2,
-      y: h / 2,
-      targetVx: 0,
-      targetVy: 0,
-      smoothVx: 0,
-      smoothVy: 0,
-      trail: [],
-    };
-  }, []);
-
-  // Main render loop
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -55,128 +22,115 @@ export function BallApp() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const loop = (time: number) => {
+    const loop = () => {
       const dpr = window.devicePixelRatio || 1;
       const rect = container.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
 
-      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
-        canvas.width = rect.width * dpr;
-        canvas.height = rect.height * dpr;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
       }
+
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      // Initialize ball if needed
-      if (!ballRef.current) {
-        ballRef.current = initBall(w, h);
-        prevTimeRef.current = time;
-      }
-      const ball = ballRef.current;
-      const dt = Math.min((time - prevTimeRef.current) / 1000, 0.1); // cap at 100ms
-      prevTimeRef.current = time;
-
-      // Update target velocity from latest server data
-      const d = dataRef.current;
-      if (d && d.calibrated) {
-        ball.targetVx = d.asymmetry * MAX_SPEED;
-        ball.targetVy = -(d.concentration - 0.5) * 2 * MAX_SPEED; // negative: up is less Y
-      }
-
-      // Smooth velocity
-      ball.smoothVx += LERP_FACTOR * (ball.targetVx - ball.smoothVx);
-      ball.smoothVy += LERP_FACTOR * (ball.targetVy - ball.smoothVy);
-
-      // Update position
-      ball.x += ball.smoothVx * dt;
-      ball.y += ball.smoothVy * dt;
-
-      // Soft clamp (rubber band at boundaries)
-      const margin = BALL_RADIUS + 4;
-      if (ball.x < margin) ball.x = margin + (ball.x - margin) * 0.3;
-      if (ball.x > w - margin) ball.x = w - margin + (ball.x - (w - margin)) * 0.3;
-      if (ball.y < margin) ball.y = margin + (ball.y - margin) * 0.3;
-      if (ball.y > h - margin) ball.y = h - margin + (ball.y - (h - margin)) * 0.3;
-
-      // Update trail
-      ball.trail.push({ x: ball.x, y: ball.y });
-      if (ball.trail.length > TRAIL_LENGTH) ball.trail.shift();
-
-      // --- Draw ---
       ctx.fillStyle = "#141416";
       ctx.fillRect(0, 0, w, h);
 
-      // Signal strength for glow intensity
-      const strength = d
+      const current = stateRef.current;
+      const control = current.control;
+      const strength = control
         ? Math.min(
             1,
-            Math.sqrt(d.asymmetry * d.asymmetry + (d.concentration - 0.5) ** 2) * 2,
+            Math.sqrt(
+              control.asymmetry * control.asymmetry +
+                (control.concentration - 0.5) ** 2,
+            ) * 2,
           )
         : 0;
 
-      // Trail
-      for (let i = 0; i < ball.trail.length; i++) {
-        const t = ball.trail[i];
-        const alpha = (i / ball.trail.length) * 0.3;
-        const radius = BALL_RADIUS * (0.3 + 0.7 * (i / ball.trail.length));
+      // Draw target if set
+      if (current.target) {
+        const tx = current.target.x * w;
+        const ty = current.target.y * h;
+        const targetRadius = 20;
+
+        // Pulsing ring
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 400);
+
+        // Outer glow
+        const tGrad = ctx.createRadialGradient(tx, ty, targetRadius * 0.5, tx, ty, targetRadius * (1.5 + pulse * 0.5));
+        tGrad.addColorStop(0, `rgba(255, 140, 50, ${0.15 + pulse * 0.1})`);
+        tGrad.addColorStop(1, "rgba(255, 140, 50, 0)");
         ctx.beginPath();
-        ctx.arc(t.x, t.y, radius, 0, Math.PI * 2);
+        ctx.arc(tx, ty, targetRadius * (1.5 + pulse * 0.5), 0, Math.PI * 2);
+        ctx.fillStyle = tGrad;
+        ctx.fill();
+
+        // Ring
+        ctx.beginPath();
+        ctx.arc(tx, ty, targetRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 140, 50, ${0.6 + pulse * 0.3})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Crosshair
+        ctx.beginPath();
+        ctx.moveTo(tx - targetRadius * 0.4, ty);
+        ctx.lineTo(tx + targetRadius * 0.4, ty);
+        ctx.moveTo(tx, ty - targetRadius * 0.4);
+        ctx.lineTo(tx, ty + targetRadius * 0.4);
+        ctx.strokeStyle = `rgba(255, 140, 50, ${0.5 + pulse * 0.3})`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      for (let i = 0; i < current.ball.trail.length; i++) {
+        const point = current.ball.trail[i];
+        const alpha = (i / Math.max(current.ball.trail.length, 1)) * 0.3;
+        const radius = BALL_RADIUS * (0.3 + 0.7 * (i / Math.max(current.ball.trail.length, 1)));
+        ctx.beginPath();
+        ctx.arc(point.x * w, point.y * h, radius, 0, Math.PI * 2);
         ctx.fillStyle = GLOW_COLOR + alpha + ")";
         ctx.fill();
       }
 
-      // Glow
+      const ballX = current.ball.x * w;
+      const ballY = current.ball.y * h;
       const glowRadius = BALL_RADIUS * (2 + strength * 2);
       const gradient = ctx.createRadialGradient(
-        ball.x,
-        ball.y,
+        ballX,
+        ballY,
         BALL_RADIUS * 0.5,
-        ball.x,
-        ball.y,
+        ballX,
+        ballY,
         glowRadius,
       );
       gradient.addColorStop(0, GLOW_COLOR + (0.3 + strength * 0.3) + ")");
       gradient.addColorStop(1, GLOW_COLOR + "0)");
       ctx.beginPath();
-      ctx.arc(ball.x, ball.y, glowRadius, 0, Math.PI * 2);
+      ctx.arc(ballX, ballY, glowRadius, 0, Math.PI * 2);
       ctx.fillStyle = gradient;
       ctx.fill();
 
-      // Ball
       ctx.beginPath();
-      ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
+      ctx.arc(ballX, ballY, BALL_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = BALL_COLOR;
       ctx.fill();
 
-      // Calibrating label
-      if (!d || !d.calibrated) {
-        ctx.font = "13px monospace";
-        ctx.fillStyle = "#666";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("Calibrating...", w / 2, h / 2 + BALL_RADIUS + 28);
+      if (current.state === "idle") {
+        drawCenteredLabel(ctx, w, h, "Waiting for an agent to start...");
+      } else if (!control || !control.calibrated) {
+        drawCenteredLabel(ctx, w, h, "Warming up control signal...");
       }
 
       rafRef.current = requestAnimationFrame(loop);
     };
 
     rafRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, [initBall]);
-
-  // Reset ball position on resize
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const observer = new ResizeObserver(() => {
-      ballRef.current = null; // re-initialize on next frame
-    });
-    observer.observe(container);
-    return () => observer.disconnect();
+    return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
   if (error) {
@@ -203,9 +157,48 @@ export function BallApp() {
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
+        backgroundColor: "#141416",
       }}
     >
-      {/* Canvas */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0.5rem 1rem",
+          borderBottom: "1px solid #333",
+          fontFamily: "monospace",
+          fontSize: "0.8rem",
+          color: "#888",
+          gap: "1rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <span>
+          Brain Ball
+          {state.sessionId && <span style={{ color: "#555" }}> &middot; {state.sessionId}</span>}
+        </span>
+        <span style={{ color: state.state === "running" ? "#7c6fe0" : "#666" }}>
+          {state.state === "running" ? "running" : "idle"}
+        </span>
+      </div>
+
+      {state.message && (
+        <div
+          style={{
+            padding: "0.5rem 1rem",
+            borderBottom: "1px solid #222",
+            fontFamily: "monospace",
+            fontSize: "0.8rem",
+            color: "#ddd",
+            backgroundColor: "#1a1a2e",
+            lineHeight: 1.5,
+          }}
+        >
+          {state.message}
+        </div>
+      )}
+
       <div ref={containerRef} style={{ flex: 1, minHeight: 0 }}>
         <canvas
           ref={canvasRef}
@@ -213,15 +206,40 @@ export function BallApp() {
         />
       </div>
 
-      {/* Debug readout */}
-      <SignalReadout data={data} />
+      <SignalReadout
+        state={state.state}
+        control={state.control}
+        connectedClients={state.connectedClients}
+        tickHz={state.tickHz}
+      />
     </div>
   );
 }
 
-function SignalReadout({ data }: { data: ControlSignalResponse | null }) {
-  if (!data) return null;
+function drawCenteredLabel(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  text: string,
+) {
+  ctx.font = "13px monospace";
+  ctx.fillStyle = "#666";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, width / 2, height / 2 + BALL_RADIUS + 28);
+}
 
+function SignalReadout({
+  state,
+  control,
+  connectedClients,
+  tickHz,
+}: {
+  state: "idle" | "running";
+  control: ControlSignalResponse | null;
+  connectedClients: number;
+  tickHz: number;
+}) {
   return (
     <div
       style={{
@@ -236,20 +254,35 @@ function SignalReadout({ data }: { data: ControlSignalResponse | null }) {
       }}
     >
       <span>
-        Asymmetry (L/R):{" "}
-        <span style={{ color: "#aaa" }}>{data.asymmetry.toFixed(3)}</span>
+        State: <span style={{ color: "#aaa" }}>{state}</span>
+      </span>
+      <span>
+        Tick Hz: <span style={{ color: "#aaa" }}>{tickHz.toFixed(0)}</span>
+      </span>
+      <span>
+        Viewers: <span style={{ color: "#aaa" }}>{connectedClients}</span>
+      </span>
+      <span>
+        Asymmetry:{" "}
+        <span style={{ color: "#aaa" }}>
+          {control ? control.asymmetry.toFixed(3) : "n/a"}
+        </span>
       </span>
       <span>
         Concentration:{" "}
-        <span style={{ color: "#aaa" }}>{data.concentration.toFixed(3)}</span>
+        <span style={{ color: "#aaa" }}>
+          {control ? control.concentration.toFixed(3) : "n/a"}
+        </span>
       </span>
       <span>
         Raw beta/alpha:{" "}
-        <span style={{ color: "#aaa" }}>{data.raw_concentration.toFixed(2)}</span>
+        <span style={{ color: "#aaa" }}>
+          {control ? control.raw_concentration.toFixed(2) : "n/a"}
+        </span>
       </span>
-      {!data.calibrated && (
+      {control && !control.calibrated && (
         <span style={{ color: "#666" }}>
-          warming up ({data.update_count}/10)
+          warming up ({control.update_count}/10)
         </span>
       )}
     </div>

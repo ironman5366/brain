@@ -1,4 +1,4 @@
-"""BCI Controller — manages real-time P300 speller sessions driven by Claude."""
+"""BCI Controller — manages real-time P300 speller sessions driven by an agent."""
 
 import asyncio
 import json
@@ -6,12 +6,23 @@ import logging
 import tempfile
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 from scipy.signal import butter, filtfilt, iirnotch
 
 from .board import EEGStream
+from .p300_classifier import (
+    P300EEGNet,
+    extract_labeled_epochs,
+    load_model,
+    preprocess_eeg,
+    save_model,
+    score_epochs,
+    train_p300_classifier,
+)
 from .session import SessionManager
+from .timing import estimate_marker_offset_seconds, marker_epoch_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +41,7 @@ PROTOCOL_VERSION = "1.0.0"
 
 @dataclass
 class BCIController:
-    """Server-side state machine for Claude-driven BCI speller sessions."""
+    """Server-side state machine for agent-driven BCI speller sessions."""
 
     state: str = "idle"  # idle | ready | flashing | proposing
     session_id: str | None = None
@@ -41,6 +52,8 @@ class BCIController:
     _flash_marker_count: int = 0
     _feedback_result: asyncio.Event = field(default_factory=asyncio.Event)
     _feedback_value: bool | None = None
+    _classifier: P300EEGNet | None = None
+    _classifier_metrics: dict | None = None
 
     async def start(self, session_mgr: SessionManager) -> dict:
         """Start a BCI session — begins EEG recording."""
@@ -191,6 +204,77 @@ class BCIController:
             "total_markers": marker_count,
             "flash_markers": flash_markers,
             "connected_clients": len(self._subscribers),
+            "has_classifier": self._classifier is not None,
+        }
+
+    def load_classifier(self, sessions_dir: Path) -> bool:
+        """Try to load a previously trained P300 classifier."""
+        model_path = sessions_dir / "p300_model.pt"
+        if not model_path.exists():
+            return False
+        try:
+            self._classifier, self._classifier_metrics = load_model(model_path)
+            logger.info("P300 classifier loaded: %s", self._classifier_metrics)
+            return True
+        except Exception as e:
+            logger.warning("Failed to load P300 classifier: %s", e)
+            return False
+
+    def calibrate(
+        self,
+        session_mgr: SessionManager,
+        eeg_stream: EEGStream,
+        session_id: str,
+    ) -> dict:
+        """Train a P300 classifier from a completed copy-spelling session."""
+        sessions_dir = session_mgr.sessions_dir
+        session_dir = sessions_dir / session_id
+
+        # Load saved session data
+        eeg_path = session_dir / "eeg_raw.npz"
+        meta_path = session_dir / "session.json"
+        if not eeg_path.exists() or not meta_path.exists():
+            raise FileNotFoundError(f"Session not found: {session_id}")
+
+        data = np.load(eeg_path)
+        eeg = data["eeg"]
+        timestamps = data["timestamps"]
+        sr = int(data["sampling_rate"])
+        n_channels = eeg.shape[0]
+
+        with open(meta_path) as f:
+            meta = json.load(f)
+
+        markers = meta.get("markers", [])
+        flash_markers = [m for m in markers if m.get("code") == "p300_flash"]
+        labeled = [m for m in flash_markers if m.get("metadata", {}).get("is_target") is not None]
+
+        if len(labeled) < 50:
+            raise RuntimeError(
+                f"Not enough labeled markers ({len(labeled)}). "
+                "Run a copy-spelling protocol first."
+            )
+
+        # Preprocess and extract epochs
+        eeg_filtered = preprocess_eeg(eeg, sr)
+        epochs, labels = extract_labeled_epochs(eeg_filtered, timestamps, markers, sr)
+
+        # Train
+        model, metrics = train_p300_classifier(epochs, labels, n_channels=n_channels)
+
+        # Save
+        model_path = sessions_dir / "p300_model.pt"
+        save_model(model, model_path, metrics)
+
+        # Set on controller
+        self._classifier = model
+        self._classifier_metrics = metrics
+
+        return {
+            "status": "trained",
+            "model_path": str(model_path),
+            "session_id": session_id,
+            **metrics,
         }
 
     def get_epochs(
@@ -238,8 +322,8 @@ class BCIController:
         pre_samples = int(0.2 * sr)  # 200ms pre-stimulus
         post_samples = int(0.8 * sr)  # 800ms post-stimulus
         epoch_len = pre_samples + post_samples
-        t0 = timestamps[0]
         n_samples = eeg_filt.shape[1]
+        offset = estimate_marker_offset_seconds(active.markers)
 
         win_start_samp = pre_samples + int(window_start_ms * sr / 1000)
         win_end_samp = pre_samples + int(window_end_ms * sr / 1000)
@@ -257,7 +341,11 @@ class BCIController:
                 continue
 
             total_flash += 1
-            sample_idx = int((m.server_timestamp - t0) * sr)
+            unix_time = marker_epoch_seconds(m, offset)
+            if unix_time is None:
+                n_rejected += 1
+                continue
+            sample_idx = int(np.searchsorted(timestamps, unix_time))
             start = sample_idx - pre_samples
             end = sample_idx + post_samples
 
@@ -286,36 +374,68 @@ class BCIController:
             elif flash_type == "col":
                 col_epochs[flash_index].append(epoch)
 
-        # Compute scores: mean amplitude in P300 window at target channels
-        def score_epochs(epochs_dict: dict[int, list[np.ndarray]]) -> dict:
-            scores = {}
-            counts = {}
-            channel_detail = {ch: {} for ch in channels}
+        # --- Scoring ---
+        row_counts = {i: len(row_epochs[i]) for i in range(6)}
+        col_counts = {i: len(col_epochs[i]) for i in range(6)}
+
+        if self._classifier is not None:
+            # Classifier-based scoring: sum P(target) per row/col
+            scoring_method = "classifier"
+            row_scores: dict[int, float] = {}
+            col_scores: dict[int, float] = {}
 
             for idx in range(6):
-                eps = epochs_dict[idx]
-                counts[idx] = len(eps)
-                if len(eps) == 0:
-                    scores[idx] = 0.0
-                    for ch in channels:
-                        channel_detail[ch][idx] = 0.0
-                    continue
+                if row_epochs[idx]:
+                    # Take post-stimulus portion, apply CAR
+                    eps = np.array([e[:, pre_samples:] for e in row_epochs[idx]])
+                    eps = eps - eps.mean(axis=1, keepdims=True)  # CAR
+                    probs = score_epochs(self._classifier, eps)
+                    row_scores[idx] = round(float(probs.sum()), 3)
+                else:
+                    row_scores[idx] = 0.0
 
-                arr = np.array(eps)  # (n_epochs, n_channels, epoch_len)
-                mean_epoch = arr.mean(axis=0)
+                if col_epochs[idx]:
+                    eps = np.array([e[:, pre_samples:] for e in col_epochs[idx]])
+                    eps = eps - eps.mean(axis=1, keepdims=True)
+                    probs = score_epochs(self._classifier, eps)
+                    col_scores[idx] = round(float(probs.sum()), 3)
+                else:
+                    col_scores[idx] = 0.0
 
-                ch_scores = []
-                for ci, ch in zip(ch_indices, channels):
-                    val = float(mean_epoch[ci, win_start_samp:win_end_samp].mean())
-                    channel_detail[ch][idx] = round(val, 3)
-                    ch_scores.append(val)
+            channel_detail = {}  # not meaningful for classifier scoring
+        else:
+            # Amplitude-based scoring (fallback)
+            scoring_method = "amplitude"
 
-                scores[idx] = round(float(np.mean(ch_scores)), 3)
+            def _score_amplitude(epochs_dict: dict[int, list[np.ndarray]]) -> tuple:
+                scores = {}
+                ch_detail = {ch: {} for ch in channels}
+                for idx in range(6):
+                    eps = epochs_dict[idx]
+                    if not eps:
+                        scores[idx] = 0.0
+                        for ch in channels:
+                            ch_detail[ch][idx] = 0.0
+                        continue
+                    arr = np.array(eps)
+                    mean_epoch = arr.mean(axis=0)
+                    ch_scores = []
+                    for ci, ch in zip(ch_indices, channels):
+                        val = float(mean_epoch[ci, win_start_samp:win_end_samp].mean())
+                        ch_detail[ch][idx] = round(val, 3)
+                        ch_scores.append(val)
+                    scores[idx] = round(float(np.mean(ch_scores)), 3)
+                return scores, ch_detail
 
-            return scores, counts, channel_detail
-
-        row_scores, row_counts, row_ch_detail = score_epochs(row_epochs)
-        col_scores, col_counts, col_ch_detail = score_epochs(col_epochs)
+            row_scores, row_ch_detail = _score_amplitude(row_epochs)
+            col_scores, col_ch_detail = _score_amplitude(col_epochs)
+            channel_detail = {
+                ch: {
+                    "row_scores": [row_ch_detail[ch][i] for i in range(6)],
+                    "col_scores": [col_ch_detail[ch][i] for i in range(6)],
+                }
+                for ch in channels
+            }
 
         # Predict letter
         best_row = max(range(6), key=lambda i: row_scores[i])
@@ -323,8 +443,8 @@ class BCIController:
         predicted_letter = P300_MATRIX[best_row * 6 + best_col]
 
         # Confidence: normalized margin between best and second-best
-        def confidence(scores: dict[int, float]) -> float:
-            vals = sorted(scores.values(), reverse=True)
+        def confidence(scores_dict: dict[int, float]) -> float:
+            vals = sorted(scores_dict.values(), reverse=True)
             if len(vals) < 2 or vals[0] == 0:
                 return 0.0
             return round((vals[0] - vals[1]) / abs(vals[0]) if vals[0] != 0 else 0.0, 3)
@@ -332,27 +452,24 @@ class BCIController:
         row_conf = confidence(row_scores)
         col_conf = confidence(col_scores)
 
-        return {
+        result = {
             "row_scores": [row_scores[i] for i in range(6)],
             "col_scores": [col_scores[i] for i in range(6)],
             "predicted_letter": predicted_letter,
             "confidence": round((row_conf + col_conf) / 2, 3),
             "best_row": best_row,
             "best_col": best_col,
+            "scoring_method": scoring_method,
             "n_epochs": {
                 **{f"row_{i}": row_counts[i] for i in range(6)},
                 **{f"col_{i}": col_counts[i] for i in range(6)},
             },
             "n_rejected": n_rejected,
             "total_flash_markers": total_flash,
-            "channel_detail": {
-                ch: {
-                    "row_scores": [row_ch_detail[ch][i] for i in range(6)],
-                    "col_scores": [col_ch_detail[ch][i] for i in range(6)],
-                }
-                for ch in channels
-            },
         }
+        if channel_detail:
+            result["channel_detail"] = channel_detail
+        return result
 
     def snapshot(
         self,
@@ -375,6 +492,7 @@ class BCIController:
             {
                 "code": m.code,
                 "timestamp": m.timestamp,
+                "client_time_ms": m.client_time_ms,
                 "server_timestamp": m.server_timestamp,
                 "block_id": m.block_id,
                 "trial_index": m.trial_index,

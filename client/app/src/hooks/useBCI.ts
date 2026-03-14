@@ -1,11 +1,10 @@
 /**
  * BCI hook — subscribes to server SSE events and executes flash sequences.
- * Claude controls the session via MCP tools; this hook renders the UI.
+ * An external agent controls the session; this hook renders the UI.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { buildBCIFlashSchedule, P300_MATRIX } from "../lib/p300";
-import type { BCIFlashSchedule, FlashEvent } from "../lib/p300";
 import { MarkerSender } from "../lib/markers";
 
 const API_BASE = "http://localhost:8765";

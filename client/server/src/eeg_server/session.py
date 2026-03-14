@@ -20,6 +20,7 @@ class EventMarker:
 
     code: str
     timestamp: float  # performance.now() from frontend (ms)
+    client_time_ms: float | None = None  # Unix epoch in ms from the browser
     server_timestamp: float = 0.0  # time.time() on receipt
     block_id: str | None = None
     trial_index: int | None = None
@@ -76,13 +77,13 @@ class RecordingSession:
 
     def add_markers(self, markers: list[dict]) -> None:
         """Add a batch of markers from the frontend."""
-        server_time = time.time()
         for m in markers:
             self.markers.append(
                 EventMarker(
                     code=m["code"],
                     timestamp=m["timestamp"],
-                    server_timestamp=server_time,
+                    client_time_ms=m.get("client_time_ms"),
+                    server_timestamp=time.time(),
                     block_id=m.get("block_id"),
                     trial_index=m.get("trial_index"),
                     metadata=m.get("metadata"),
@@ -141,6 +142,7 @@ class RecordingSession:
                 {
                     "code": m.code,
                     "timestamp": m.timestamp,
+                    "client_time_ms": m.client_time_ms,
                     "server_timestamp": m.server_timestamp,
                     "block_id": m.block_id,
                     "trial_index": m.trial_index,

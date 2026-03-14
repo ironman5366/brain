@@ -23,7 +23,7 @@ export function CalibrationApp() {
   const latestMessage =
     state.messages.length > 0
       ? state.messages[state.messages.length - 1]
-      : "Waiting for Claude to begin calibration...";
+      : "Waiting for an agent to begin calibration...";
 
   return (
     <div
@@ -100,7 +100,7 @@ export function CalibrationApp() {
                 fontSize: "0.85rem",
               }}
             >
-              No measurements yet. Open this page and tell Claude you're ready
+              No measurements yet. Open this page and tell the agent you're ready
               to calibrate.
             </div>
           )}
