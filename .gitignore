@@ -12,3 +12,4 @@ lightning_logs/
 tmp_out/
 sessions/
 **/.vite
+paper_sources
