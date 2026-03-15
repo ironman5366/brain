@@ -5,6 +5,7 @@ from pathlib import Path
 
 import click
 import uvicorn
+from dotenv import load_dotenv
 
 from .board import EEGStream
 from .config import BoardMode, ServerConfig, find_serial_port
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 def _run_server(mode: str, serial_port: str, port: int, host: str) -> None:
     """Core server startup — extracted so watchfiles can restart it."""
+    # Load .env (walks up from cwd to find it)
+    load_dotenv()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",

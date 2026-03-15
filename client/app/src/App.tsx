@@ -13,6 +13,7 @@ import { AsymmetryApp } from "./components/asymmetry/AsymmetryApp";
 import { Dashboard } from "./components/Dashboard";
 import type { AppId } from "./components/Dashboard";
 import { useNavigation } from "./hooks/useNavigation";
+import { VoiceOverlay } from "./components/voice/VoiceOverlay";
 
 const WS_URL = "ws://localhost:8765/ws/eeg";
 
@@ -146,6 +147,8 @@ function App() {
             }
           />
         ))}
+
+      <VoiceOverlay />
     </div>
   );
 }

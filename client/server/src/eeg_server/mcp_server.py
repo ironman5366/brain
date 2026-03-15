@@ -360,5 +360,157 @@ def ball_stop() -> str:
     return _sync_post("/api/ball/stop")
 
 
+# --- Session Management Tools ---
+
+
+@mcp.tool()
+def session_start(protocol_id: str, protocol_version: str = "1.0.0") -> str:
+    """Start a generic EEG recording session.
+
+    Use this for paradigms that don't have their own start tool (e.g. eyes-open/closed
+    alpha recording, resting state, custom protocols). For BCI and ball paradigms,
+    use bci_start() or ball_start() instead — they create sessions internally.
+
+    Args:
+        protocol_id: Descriptive ID for the protocol (e.g. "alpha-eyes-open-closed",
+            "resting-state", "auditory-oddball").
+        protocol_version: Version string (default "1.0.0").
+    """
+    return _sync_post("/api/session/start", {
+        "protocol_id": protocol_id,
+        "protocol_version": protocol_version,
+    })
+
+
+@mcp.tool()
+def session_stop(session_id: str) -> str:
+    """Stop the active recording session and save all data to disk.
+
+    Returns: session_id, duration_sec, total_markers, total_responses.
+
+    Args:
+        session_id: The session_id returned by session_start().
+    """
+    return _sync_post("/api/session/stop", {"session_id": session_id})
+
+
+@mcp.tool()
+def session_add_marker(code: str, metadata: str = "{}") -> str:
+    """Add an event marker to the currently active recording session.
+
+    Use this to mark experiment events: block boundaries, condition changes,
+    stimulus onsets, user actions, or any notable moment during recording.
+
+    Args:
+        code: Short marker code (e.g. "block_start", "eyes_open", "stimulus_onset").
+        metadata: JSON string of arbitrary key-value pairs for extra context
+            (e.g. '{"block_id": "rest-1", "condition": "eyes_closed"}').
+    """
+    return _sync_post("/api/session/marker/auto", {
+        "code": code,
+        "metadata": json.loads(metadata),
+    })
+
+
+@mcp.tool()
+def session_list() -> str:
+    """List all saved experiment sessions.
+
+    Returns an array of session summaries with session_id, protocol_id,
+    status, duration, marker count, etc.
+    """
+    return _sync_get("/api/sessions")
+
+
+@mcp.tool()
+def session_get(session_id: str) -> str:
+    """Get full metadata for a saved session.
+
+    Returns protocol info, timing, marker counts, and file paths.
+
+    Args:
+        session_id: The session ID to look up.
+    """
+    return _sync_get(f"/api/sessions/{session_id}")
+
+
+@mcp.tool()
+def server_status() -> str:
+    """Get EEG server status.
+
+    Returns: board_connected, board_mode (cyton/synthetic), sampling_rate,
+    channel names, and whether the stream is active.
+    """
+    return _sync_get("/api/status")
+
+
+# --- Voice Tools ---
+
+
+@mcp.tool()
+def voice_ask(context: str, question: str) -> str:
+    """Ask the user a question via voice using the OpenAI Realtime voice agent.
+
+    The user's browser establishes a voice connection. The AI voice agent
+    speaks your question, listens for the user's verbal response, and
+    relays it back as text.
+
+    Blocks until the user responds verbally (up to 120 seconds).
+
+    Use this when the user can't easily type — e.g., wearing a headset
+    during an experiment, or when you need hands-free confirmation.
+
+    Args:
+        context: Background context for the voice agent so it understands
+            the situation (e.g., "We are running an EEG experiment. The user
+            has their headset on and we just finished calibration.").
+        question: The specific question or message to speak to the user
+            (e.g., "Are you ready to begin the next trial?").
+    """
+    return _sync_post_blocking(
+        "/api/voice/ask",
+        {"context": context, "question": question},
+        timeout=120,
+    )
+
+
+@mcp.tool()
+def voice_inbox() -> str:
+    """Check for user-initiated voice messages and return them.
+
+    The user can press spacebar in the browser at any time to speak.
+    Messages accumulate in a server-side inbox. This tool returns all
+    pending messages and clears the inbox.
+
+    Returns a JSON array of messages, each with: id, message, timestamp.
+    Returns an empty array if no messages are pending.
+    """
+    return _sync_get("/api/voice/inbox")
+
+
+@mcp.tool()
+def voice_notify(text: str) -> str:
+    """Update the status bar in the user's browser.
+
+    Use this to keep the user informed about what's happening — e.g.,
+    "Checking signal quality...", "Running alpha recording block 2/5",
+    "Analyzing session data...". The text appears in the top bar of
+    the browser UI. Non-blocking.
+
+    Args:
+        text: Status text to display in the browser bar.
+    """
+    return _sync_post("/api/voice/notify", {"text": text})
+
+
+@mcp.tool()
+def voice_status() -> str:
+    """Check if the voice agent is available and whether a voice request is active.
+
+    Returns: active (bool), pending request info, connected_clients count.
+    """
+    return _sync_get("/api/voice/status")
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
