@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 
 import msgpack
@@ -488,6 +489,28 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
             raise HTTPException(404, "No active session with that ID")
         active.add_markers(req.markers)
         return {"ok": True, "count": len(req.markers)}
+
+    class AutoMarkerRequest(BaseModel):
+        code: str
+        metadata: dict = {}
+
+    @app.post("/api/session/marker/auto")
+    async def add_marker_auto(req: AutoMarkerRequest):
+        """Add a single marker to the active session (no session_id needed).
+
+        Designed for MCP tool callers that don't track session IDs.
+        """
+        active = session_mgr.active_session
+        if active is None:
+            raise HTTPException(404, "No active recording session")
+        marker = {
+            "code": req.code,
+            "timestamp": 0,
+            "server_timestamp": time.time(),
+            "metadata": req.metadata,
+        }
+        active.add_markers([marker])
+        return {"ok": True, "session_id": active.session_id}
 
     @app.post("/api/session/response")
     async def add_response(req: ResponseRequest):

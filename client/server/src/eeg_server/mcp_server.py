@@ -360,5 +360,89 @@ def ball_stop() -> str:
     return _sync_post("/api/ball/stop")
 
 
+# --- Session Management Tools ---
+
+
+@mcp.tool()
+def session_start(protocol_id: str, protocol_version: str = "1.0.0") -> str:
+    """Start a generic EEG recording session.
+
+    Use this for paradigms that don't have their own start tool (e.g. eyes-open/closed
+    alpha recording, resting state, custom protocols). For BCI and ball paradigms,
+    use bci_start() or ball_start() instead — they create sessions internally.
+
+    Args:
+        protocol_id: Descriptive ID for the protocol (e.g. "alpha-eyes-open-closed",
+            "resting-state", "auditory-oddball").
+        protocol_version: Version string (default "1.0.0").
+    """
+    return _sync_post("/api/session/start", {
+        "protocol_id": protocol_id,
+        "protocol_version": protocol_version,
+    })
+
+
+@mcp.tool()
+def session_stop(session_id: str) -> str:
+    """Stop the active recording session and save all data to disk.
+
+    Returns: session_id, duration_sec, total_markers, total_responses.
+
+    Args:
+        session_id: The session_id returned by session_start().
+    """
+    return _sync_post("/api/session/stop", {"session_id": session_id})
+
+
+@mcp.tool()
+def session_add_marker(code: str, metadata: str = "{}") -> str:
+    """Add an event marker to the currently active recording session.
+
+    Use this to mark experiment events: block boundaries, condition changes,
+    stimulus onsets, user actions, or any notable moment during recording.
+
+    Args:
+        code: Short marker code (e.g. "block_start", "eyes_open", "stimulus_onset").
+        metadata: JSON string of arbitrary key-value pairs for extra context
+            (e.g. '{"block_id": "rest-1", "condition": "eyes_closed"}').
+    """
+    return _sync_post("/api/session/marker/auto", {
+        "code": code,
+        "metadata": json.loads(metadata),
+    })
+
+
+@mcp.tool()
+def session_list() -> str:
+    """List all saved experiment sessions.
+
+    Returns an array of session summaries with session_id, protocol_id,
+    status, duration, marker count, etc.
+    """
+    return _sync_get("/api/sessions")
+
+
+@mcp.tool()
+def session_get(session_id: str) -> str:
+    """Get full metadata for a saved session.
+
+    Returns protocol info, timing, marker counts, and file paths.
+
+    Args:
+        session_id: The session ID to look up.
+    """
+    return _sync_get(f"/api/sessions/{session_id}")
+
+
+@mcp.tool()
+def server_status() -> str:
+    """Get EEG server status.
+
+    Returns: board_connected, board_mode (cyton/synthetic), sampling_rate,
+    channel names, and whether the stream is active.
+    """
+    return _sync_get("/api/status")
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
