@@ -444,5 +444,73 @@ def server_status() -> str:
     return _sync_get("/api/status")
 
 
+# --- Voice Tools ---
+
+
+@mcp.tool()
+def voice_ask(context: str, question: str) -> str:
+    """Ask the user a question via voice using the OpenAI Realtime voice agent.
+
+    The user's browser establishes a voice connection. The AI voice agent
+    speaks your question, listens for the user's verbal response, and
+    relays it back as text.
+
+    Blocks until the user responds verbally (up to 120 seconds).
+
+    Use this when the user can't easily type — e.g., wearing a headset
+    during an experiment, or when you need hands-free confirmation.
+
+    Args:
+        context: Background context for the voice agent so it understands
+            the situation (e.g., "We are running an EEG experiment. The user
+            has their headset on and we just finished calibration.").
+        question: The specific question or message to speak to the user
+            (e.g., "Are you ready to begin the next trial?").
+    """
+    return _sync_post_blocking(
+        "/api/voice/ask",
+        {"context": context, "question": question},
+        timeout=120,
+    )
+
+
+@mcp.tool()
+def voice_inbox() -> str:
+    """Check for user-initiated voice messages and return them.
+
+    The user can press spacebar in the browser at any time to speak.
+    Messages accumulate in a server-side inbox. This tool returns all
+    pending messages and clears the inbox.
+
+    Returns a JSON array of messages, each with: id, message, timestamp.
+    Returns an empty array if no messages are pending.
+    """
+    return _sync_get("/api/voice/inbox")
+
+
+@mcp.tool()
+def voice_notify(text: str) -> str:
+    """Update the status bar in the user's browser.
+
+    Use this to keep the user informed about what's happening — e.g.,
+    "Checking signal quality...", "Running alpha recording block 2/5",
+    "Analyzing session data...". The text appears in the top bar of
+    the browser UI. Non-blocking.
+
+    Args:
+        text: Status text to display in the browser bar.
+    """
+    return _sync_post("/api/voice/notify", {"text": text})
+
+
+@mcp.tool()
+def voice_status() -> str:
+    """Check if the voice agent is available and whether a voice request is active.
+
+    Returns: active (bool), pending request info, connected_clients count.
+    """
+    return _sync_get("/api/voice/status")
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

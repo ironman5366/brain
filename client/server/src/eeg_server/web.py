@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 import msgpack
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -25,6 +25,7 @@ from .cyton import CYTON_WIRE_COLORS, CYTON_PIN_LABELS
 from .signal_quality import analyze_signal_quality
 from .session import SessionManager
 from .control import ControlSignalComputer
+from .voice import VoiceController
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +211,7 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     calibration = CalibrationController()
     control = ControlSignalComputer()
     ball = BallController()
+    voice = VoiceController()
 
     # --- Navigation (agent-driven UI routing) ---
     _nav_subscribers: set[asyncio.Queue] = set()
@@ -873,5 +875,79 @@ def create_app(config: ServerConfig, eeg_stream: EEGStream) -> FastAPI:
     async def calibration_status():
         """Get current calibration state summary."""
         return calibration._get_state()
+
+    # --- Voice Agent (Claude ↔ user via OpenAI Realtime) ---
+
+    class VoiceAskRequest(BaseModel):
+        context: str
+        question: str
+
+    @app.get("/api/voice/events")
+    async def voice_events():
+        """SSE stream for pushing voice requests to the browser."""
+        return StreamingResponse(
+            voice.events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/api/voice/ask")
+    async def voice_ask(req: VoiceAskRequest):
+        """Blocking: Claude sends a question, waits for user's verbal response."""
+        return await voice.ask(req.context, req.question)
+
+    @app.get("/api/voice/speak")
+    async def voice_speak(text: str):
+        """Stream TTS audio for the given text. Returns WAV audio."""
+        from .voice import synthesize_full
+        loop = asyncio.get_event_loop()
+        audio_bytes = await loop.run_in_executor(None, synthesize_full, text)
+        return StreamingResponse(
+            iter([audio_bytes]),
+            media_type="audio/wav",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @app.post("/api/voice/transcribe")
+    async def voice_transcribe(
+        audio: UploadFile,
+        request_id: str | None = Form(None),
+    ):
+        """Transcribe uploaded audio with faster-whisper.
+
+        If request_id is provided, submits the transcript as a response to
+        a pending voice_ask. Otherwise, adds it to the inbox.
+        """
+        from .voice import transcribe_audio
+        audio_bytes = await audio.read()
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(
+            None, transcribe_audio, audio_bytes, audio.filename or "audio.webm"
+        )
+
+        if request_id:
+            voice.submit_response(request_id, text)
+        else:
+            voice.add_to_inbox(text)
+
+        return {"text": text}
+
+    @app.get("/api/voice/inbox")
+    async def voice_inbox():
+        """Return and clear all pending user-initiated voice messages."""
+        return voice.get_inbox()
+
+    @app.get("/api/voice/status")
+    async def voice_status():
+        """Check voice controller state."""
+        return voice.status()
+
+    class VoiceNotifyRequest(BaseModel):
+        text: str
+
+    @app.post("/api/voice/notify")
+    async def voice_notify(req: VoiceNotifyRequest):
+        """Push a status text to the browser top bar."""
+        return await voice.notify(req.text)
 
     return app

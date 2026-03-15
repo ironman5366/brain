@@ -39,22 +39,63 @@ Claude can't see the UI. So:
 
 ## Agent Teams
 
-For complex experiment sessions, we use Claude Code agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) with 4 specialized teammates coordinated by a lead agent.
+For complex experiment sessions, set `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` to enable multi-agent mode. The lead is not a separate agent — it's the main Claude Code session you're talking to. It spawns 5 teammates:
 
 ```
-                    ┌──────────┐
-                    │   Lead   │  ← user talks to this one
-                    │(Conductor)│
-                    └────┬─────┘
-          ┌──────────┬───┴───┬──────────┐
-          ▼          ▼       ▼          ▼
-    ┌─────────┐ ┌────────┐ ┌────────┐ ┌─────────┐
-    │ Monitor │ │Experimenter│ │Paradigm│ │ Analyst │
-    │         │ │            │ │Controller│ │         │
-    └─────────┘ └────────┘ └────────┘ └─────────┘
+              ┌────────────────┐
+              │  Lead (this    │  ← the main Claude Code session
+              │  session)      │     speaks to user via voice_ask()
+              └───────┬────────┘
+    ┌────────┬────┬───┴───┬──────────┐
+    ▼        ▼    ▼       ▼          ▼
+┌────────┐ ┌────┐ ┌──────┐ ┌────────┐ ┌───────┐
+│ Voice  │ │Mon-│ │Exper-│ │Paradigm│ │Analyst│
+│Listener│ │itor│ │iment.│ │Control.│ │       │
+└────────┘ └────┘ └──────┘ └────────┘ └───────┘
 ```
+
+### Voice System
+
+The user wears an EEG headset and **cannot type** during experiments. All communication is via voice:
+
+- **User → Lead**: User presses spacebar in the browser to speak. The Voice Listener agent polls `voice_inbox()` and forwards transcribed messages to the lead.
+- **Lead → User**: Lead calls `voice_ask(context, question)` to speak to the user via local TTS (Kokoro) and waits for their verbal response (transcribed by faster-whisper).
+
+**The lead should talk to the user throughout the entire session** — narrating what's happening, explaining results, asking for preferences, and confirming before any experiment. The user should feel like they're having a conversation with a research assistant, not operating a machine.
+
+### Status Bar
+
+The lead can update the browser's top bar text at any time via `voice_notify(text)`. Use this to keep the user informed about what's happening in between voice conversations — e.g., "Checking signal quality...", "Running alpha recording block 2/5", "Analyzing session data...". The user should never be sitting in silence wondering what's going on.
+
+### Voice-First Confirmation Rules
+
+- **Before ANY experiment or trial**: The lead MUST call `voice_ask()` to get verbal confirmation (e.g., "Are you ready to start the alpha recording?"). Never start based on text/typing alone.
+- **Between experiments**: The lead should verbally report results and ask what to do next.
+- **On errors or signal issues**: The lead should verbally explain the problem and suggest fixes.
+- **When the user speaks** (via Voice Listener): The lead should acknowledge verbally with `voice_ask()` before acting.
+- **During long-running operations**: The lead should update the status bar via `voice_notify()` so the user can see progress.
 
 ### Spawn Prompts
+
+#### Voice Listener
+
+```
+You are the Voice Listener for a live EEG/BCI experiment platform. Your ONLY job is to
+receive voice messages from the user and forward them to the lead.
+
+LOOP FOREVER:
+1. Call voice_inbox() to check for new user messages
+2. If there are messages, forward each one to the lead via SendMessage
+3. Wait a few seconds
+4. Go back to step 1
+
+RULES:
+- Do NOT interpret, act on, or respond to the user's messages yourself
+- Do NOT call any other tools besides voice_inbox() and SendMessage
+- Do NOT modify any files
+- Just relay. That's it. You are a pipe.
+- If voice_inbox() returns an empty list, that's fine — just wait and try again
+```
 
 #### Monitor
 
@@ -113,7 +154,7 @@ COMMUNICATION:
 
 CRITICAL RULES:
 - NEVER start an experiment without confirming signal quality with the lead
-- NEVER start a timed trial without user confirmation (the user must say they are ready)
+- NEVER start a timed trial without verbal user confirmation — message the lead to ask the user via voice_ask(). The user cannot type.
 - Always run calibration after server restart, headset adjustment, or room change
 ```
 
@@ -146,7 +187,7 @@ COMMUNICATION:
 - Listen for SIGNAL_ALERT broadcasts — pause and alert Experimenter if received
 
 CRITICAL RULES:
-- ALWAYS get user confirmation before starting any timed trial
+- ALWAYS get user confirmation before starting any timed trial — message the lead to ask via voice. The user cannot type.
 - NEVER start paradigms without receiving BEGIN_PARADIGM from Experimenter
 - Use bci_play_sound() for auditory feedback when appropriate
 ```
@@ -191,7 +232,9 @@ All teammates share the same MCP server. Separation is by convention:
 
 | Agent | Primary Tools | Never Touch |
 |-------|--------------|-------------|
-| Monitor | calibration_check_signal, server_status, navigate, calibration_status | session_*, bci_*, ball_* |
+| Voice Listener | voice_inbox | everything else |
+| Lead | voice_ask, voice_notify, voice_status, Bash (server mgmt) | voice_inbox (Voice Listener handles this) |
+| Monitor | calibration_check_signal, server_status, navigate, calibration_status | session_*, bci_*, ball_*, voice_* |
 | Experimenter | session_start, session_stop, session_add_marker, session_list | bci_flash, bci_epochs, ball_start (delegates these) |
 | Paradigm Controller | bci_*, ball_*, calibration_check_impedance, calibration_message | session_start, session_stop |
 | Analyst | session_get, session_list, bci_snapshot | bci_flash, ball_start, navigate |
@@ -200,6 +243,7 @@ All teammates share the same MCP server. Separation is by convention:
 
 Agents communicate via direct messages and broadcasts:
 
+**Voice Listener → Lead**: User voice messages (verbatim relay, every time user speaks)
 **Monitor → Lead**: Signal quality changes, board status alerts
 **Monitor → All (broadcast)**: `SIGNAL_ALERT` for critical issues
 **Lead → Experimenter**: Experiment requests (what paradigm, what config)
